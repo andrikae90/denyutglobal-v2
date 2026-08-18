@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /redaksi
+Disallow: /editorial
+
+Sitemap: https://denyutglobal.id/sitemap.xml
