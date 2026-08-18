@@ -282,7 +282,7 @@ Kembalikan HANYA format JSON valid:
     const factsString = Array.isArray(rawFacts) ? rawFacts.join('\n') : String(rawFacts || '');
     const factsList = factsString
       .split('\n')
-      .map(f => f.trim().replace(/^[-*•0-9.]\s*/, ''))
+      .map(f => f.trim().replace(/^[-*•0-9.]+\s*/, '').trim())
       .filter(Boolean);
 
     const rawNotes = (roughNotes || catatan || '').trim();
@@ -328,11 +328,15 @@ Kembalikan HANYA format JSON valid:
       const factCheckPrompt = `Anda adalah Verifikator Fakta & Auditor Integritas Editorial Independen di DenyutGlobal (media kredibel berbahasa Indonesia dengan standar verifikasi fakta tertinggi).
 Tugas Anda adalah melakukan audit investigatif dan verifikasi kebenaran secara ketat terhadap setiap klaim, angka, kutipan, dan sumber sebelum naskah diizinkan tayang.
 
-STANDAR & 10 ATURAN AUDIT KETAT DENYUTGLOBAL:
+STANDAR & ATURAN AUDIT KETAT DENYUTGLOBAL:
 
-1. PEMERIKSAAN KLAIM SECARA INDIVIDUAL:
-   - Setiap klaim fakta utama dalam naskah HARUS diperiksa dan dievaluasi satu per satu secara individual.
-   - Jangan menyimpulkan bahwa seluruh berita terverifikasi hanya karena satu atau sebagian klaim didukung sumber.
+1. ATURAN WAJIB PEMERIKSAAN FAKTA UTAMA (1 FAKTA = 1 CLAIM):
+   - Terdapat ${factsList.length} butir FAKTA UTAMA yang diinput oleh editor.
+   - Array "claims" yang Anda hasilkan WAJIB memiliki minimal ${Math.max(factsList.length, 1)} elemen.
+   - SETIAP BUTIR FAKTA UTAMA HARUS MENGHASILKAN TEPAT SATU ELEMEN DALAM ARRAY "claims".
+   - DILARANG MERANGKUM ATAU MENGGABUNGKAN BEBERAPA FAKTA UTAMA MENJADI SATU KLAIM.
+   - Setiap claim harus mempertahankan teks dan maksud dari Fakta Utama asal yang bersangkutan.
+   - Jika ada klaim tambahan dari isi naskah (lead/tubuh artikel/angka krusial), Anda boleh menambahkannya setelah butir-butir Fakta Utama tersebut.
 
 2. VERIFIKASI SUMBER PRIMER & URL:
    - Sumber primer hanya boleh dianggap TERKONFIRMASI ("status": "verified", "supported": true) jika URL sumber dapat diverifikasi secara valid dan isi sumber benar-benar membuktikan klaim tersebut.
@@ -359,17 +363,17 @@ STANDAR & 10 ATURAN AUDIT KETAT DENYUTGLOBAL:
 
 8. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
    - Status "LOLOS VERIFIKASI BERSIH" ("passed": true, "canPublish": true, "hasUnverifiedClaims": false) HANYA BOLEH DIBERIKAN jika:
-     a) SEMUA klaim utama yang diaudit memiliki dukungan sumber rujukan yang valid dan memadai;
+     a) SEMUA butir Fakta Utama yang diaudit memiliki claim hasil audit tersendiri dan masing-masing memiliki dukungan sumber rujukan yang valid dan memadai;
      b) Setidaknya satu sumber memiliki URL yang valid dan dapat diverifikasi;
      c) Judul selaras dengan fakta utama;
      d) Tidak ada konflik fakta;
      e) Tidak ada data angka/tokoh/lokasi yang tidak terverifikasi;
      f) Tidak ada kata terlarang, kalimat template, atau placeholder.
-   - Jika terdapat SATU SAJA klaim utama yang belum didukung sumber atau URL-nya tidak valid, maka status keseluruhan WAJIB "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
+   - Jika terdapat SATU SAJA butir Fakta Utama yang belum didukung sumber, berstatus needs_verification/missing_source, atau URL-nya tidak valid, maka status keseluruhan WAJIB "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
 
 BAHAN ACUAN EDITOR (GROUND TRUTH):
-- Fakta Utama Terverifikasi:
-${factsString || '(Belum ada poin fakta spesifik)'}
+- Daftar Fakta Utama Terverifikasi (${factsList.length} butir):
+${factsList.length > 0 ? factsList.map((f, i) => `[Fakta Utama ${i + 1}] ${f}`).join('\n') : '(Belum ada poin fakta spesifik)'}
 - Catatan Tambahan Editor:
 ${rawNotes || '(Kosong)'}
 - Daftar Sumber Rujukan Terdaftar:
@@ -384,7 +388,8 @@ NASKAH YANG DI-AUDIT:
 - Isi Lengkap:
 ${contentText || '(Kosong)'}
 
-KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus lain):
+KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus lain).
+Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masing dari ${factsList.length} butir Fakta Utama di atas secara terpisah` : 'setiap klaim fakta utama'}:
 {
   "passed": boolean,
   "canPublish": boolean,
@@ -395,15 +400,23 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus
   "forbiddenKeywordsFound": ["string (Kata terlarang seperti 'terbukti', 'pasti', dsb yang muncul tanpa rujukan data)"],
   "conflictWarnings": ["string (Klaim yang berkonflik dengan sumber resmi jika ditemukan)"],
   "claims": [
-    {
+    ${factsList.map((f, i) => `{
+      "id": "claim-${i + 1}",
+      "claim": "${f.replace(/"/g, '\\"')}",
+      "type": "fakta",
+      "supported": false,
+      "sourceTrace": "string (Nama sumber terdaftar)",
+      "issue": "string jika ada masalah atau kosong",
+      "status": "verified" | "needs_verification" | "missing_source"
+    }`).join(',\n    ') || `{
       "id": "claim-1",
       "claim": "string (Pernyataan klaim spesifik dalam naskah)",
       "type": "fakta" | "konteks" | "opini_analisis",
-      "supported": boolean,
-      "sourceTrace": "string (Nama sumber terdaftar atau 'Sumber belum tersedia — perlu verifikasi editor.')",
-      "issue": "string jika ada catatan masalah atau kosong",
+      "supported": false,
+      "sourceTrace": "string (Nama sumber terdaftar)",
+      "issue": "string jika ada masalah atau kosong",
       "status": "verified" | "needs_verification" | "missing_source"
-    }
+    }`}
   ],
   "sourceAudit": {
     "totalSources": number,
@@ -425,35 +438,110 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus
           if (response && response.text) {
             const parsed = JSON.parse(response.text);
 
-            // Double check strict criteria post-LLM to ensure safety
-            const claims = Array.isArray(parsed.claims) ? parsed.claims : [];
+            let rawClaims = Array.isArray(parsed.claims) ? parsed.claims : [];
+
+            // Backend validation: Ensure every Fakta Utama has its own verified claim item
+            if (factsList.length > 0) {
+              const matchedClaims: any[] = [];
+              const unmatchedFacts: string[] = [];
+
+              factsList.forEach((factText, idx) => {
+                const cleanFact = factText.toLowerCase();
+                const existing = rawClaims.find((c: any) => {
+                  if (!c || !c.claim) return false;
+                  const cText = String(c.claim).toLowerCase();
+                  return cText.includes(cleanFact.slice(0, 30)) || cleanFact.includes(cText.slice(0, 30)) || c.id === `claim-${idx + 1}`;
+                });
+
+                if (existing) {
+                  matchedClaims.push({
+                    id: existing.id || `claim-${idx + 1}`,
+                    claim: existing.claim || factText,
+                    type: existing.type || 'fakta',
+                    supported: Boolean(existing.supported && hasVerifiableSourceUrl),
+                    sourceTrace: existing.sourceTrace || (hasVerifiableSourceUrl ? `${validSources[0].name} (${validSources[0].url})` : (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.')),
+                    issue: existing.issue || (!hasVerifiableSourceUrl ? 'URL sumber rujukan belum valid atau belum diverifikasi' : undefined),
+                    status: (existing.status === 'verified' && hasVerifiableSourceUrl && existing.supported) ? 'verified' : (existing.status || 'needs_verification')
+                  });
+                } else {
+                  unmatchedFacts.push(factText);
+                  matchedClaims.push({
+                    id: `claim-${idx + 1}`,
+                    claim: factText,
+                    type: 'fakta',
+                    supported: false,
+                    sourceTrace: validSources.length > 0 ? (validSources[0].name || 'Sumber Terdaftar') : 'Sumber belum tersedia — perlu verifikasi editor.',
+                    issue: 'Fakta utama ini belum tervalidasi secara individual oleh audit model',
+                    status: 'needs_verification'
+                  });
+                }
+              });
+
+              // Also include any extra claims generated for the body/lead paragraphs
+              rawClaims.forEach((c: any, extraIdx: number) => {
+                const isAlreadyMatched = matchedClaims.some((mc: any) => mc.id === c.id || mc.claim === c.claim);
+                if (!isAlreadyMatched && c && c.claim) {
+                  matchedClaims.push({
+                    id: c.id || `claim-extra-${extraIdx + 1}`,
+                    claim: c.claim,
+                    type: c.type || 'fakta',
+                    supported: Boolean(c.supported && hasVerifiableSourceUrl),
+                    sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
+                    issue: c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : undefined),
+                    status: (c.status === 'verified' && hasVerifiableSourceUrl && c.supported) ? 'verified' : (c.status || 'needs_verification')
+                  });
+                }
+              });
+
+              rawClaims = matchedClaims;
+            }
+
+            const claims = rawClaims.map((c: any, idx: number) => ({
+              id: c.id || `claim-${idx + 1}`,
+              claim: c.claim || '',
+              type: c.type || 'fakta',
+              supported: Boolean(c.supported && hasVerifiableSourceUrl),
+              sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
+              issue: c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : undefined),
+              status: (c.status === 'verified' && hasVerifiableSourceUrl && c.supported) ? 'verified' : (c.status || 'needs_verification')
+            }));
+
+            // Strict Validation Checks
             const hasAnyUnverified = claims.some((c: any) => !c.supported || c.status !== 'verified');
             const hasMissingSources = !validSources.length || !hasVerifiableSourceUrl;
             const hasUnsupported = Array.isArray(parsed.unsupportedClaims) && parsed.unsupportedClaims.length > 0;
             const hasConflicts = Array.isArray(parsed.conflictWarnings) && parsed.conflictWarnings.length > 0;
+            const isClaimsCountSufficient = factsList.length === 0 || claims.length >= factsList.length;
 
-            const strictPassed = Boolean(parsed.passed && !hasAnyUnverified && !hasMissingSources && !hasUnsupported && !hasConflicts);
+            const strictPassed = Boolean(
+              parsed.passed && 
+              !hasAnyUnverified && 
+              !hasMissingSources && 
+              !hasUnsupported && 
+              !hasConflicts &&
+              isClaimsCountSufficient
+            );
+
+            const missingSourceClaims = Array.isArray(parsed.missingSourceClaims) ? [...parsed.missingSourceClaims] : [];
+            if (hasMissingSources && missingSourceClaims.length === 0) {
+              missingSourceClaims.push('URL sumber rujukan belum terdaftar atau tidak dapat diverifikasi.');
+            }
+            if (!isClaimsCountSufficient) {
+              missingSourceClaims.push(`Sebagian fakta utama belum ter-audit lengkap (Ditemukan ${claims.length} audit dari ${factsList.length} fakta utama).`);
+            }
 
             const finalResult = {
               passed: strictPassed,
               canPublish: strictPassed,
               hasUnverifiedClaims: !strictPassed,
               summary: strictPassed
-                ? '✅ Lolos Verifikasi Bersih: Seluruh klaim faktual, data angka, dan rujukan sumber telah terverifikasi secara individual.'
-                : (parsed.summary || '⚠️ Perlu Verifikasi Editor: Ditemukan klaim, data rujukan, atau URL sumber yang belum terverifikasi secara memadai.'),
+                ? `✅ Lolos Verifikasi Bersih: Seluruh ${claims.length} butir klaim faktual, data angka, dan rujukan sumber telah terverifikasi secara individual.`
+                : (parsed.summary || `⚠️ Perlu Verifikasi Editor: Terdapat ${claims.filter((c: any) => c.status !== 'verified').length} dari ${claims.length} butir klaim yang memerlukan konfirmasi rujukan sumber valid.`),
               unsupportedClaims: Array.isArray(parsed.unsupportedClaims) ? parsed.unsupportedClaims : [],
-              missingSourceClaims: Array.isArray(parsed.missingSourceClaims) ? parsed.missingSourceClaims : (hasMissingSources ? ['URL sumber rujukan belum terdaftar atau tidak dapat diverifikasi.'] : []),
+              missingSourceClaims,
               forbiddenKeywordsFound: Array.isArray(parsed.forbiddenKeywordsFound) ? parsed.forbiddenKeywordsFound : [],
               conflictWarnings: Array.isArray(parsed.conflictWarnings) ? parsed.conflictWarnings : [],
-              claims: claims.map((c: any, idx: number) => ({
-                id: c.id || `claim-${idx + 1}`,
-                claim: c.claim || '',
-                type: c.type || 'fakta',
-                supported: Boolean(c.supported && hasVerifiableSourceUrl),
-                sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
-                issue: c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : undefined),
-                status: (c.status === 'verified' && hasVerifiableSourceUrl) ? 'verified' : (c.status || 'needs_verification')
-              })),
+              claims,
               sourceAudit: {
                 totalSources: validSources.length,
                 sourcesProvided: validSources.length > 0,
@@ -561,13 +649,14 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus
         missingSourceClaims.push('Sumber rujukan belum memiliki URL valid yang dapat diverifikasi.');
       }
 
-      // Extract individual claims
-      const candidateSentences = [
-        ...factsList,
-        ...contentParagraphs.flatMap(p => p.split(/[.\n]/).map(s => s.trim()).filter(s => s.length > 25))
-      ].slice(0, 8);
+      // Extract individual claims strictly from ALL factsList items first, then content paragraphs
+      const claimsListToEvaluate = factsList.length > 0 
+        ? factsList 
+        : [
+            ...contentParagraphs.flatMap(p => p.split(/[.\n]/).map(s => s.trim()).filter(s => s.length > 25))
+          ].slice(0, 6);
 
-      const claims = candidateSentences.map((st, idx) => {
+      const claims = claimsListToEvaluate.map((st, idx) => {
         let type: 'fakta' | 'konteks' | 'opini_analisis' = 'fakta';
         if (st.toLowerCase().includes('karena') || st.toLowerCase().includes('sehingga') || st.toLowerCase().includes('latar belakang')) {
           type = 'konteks';
@@ -593,7 +682,8 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus
       });
 
       const hasAnyClaimUnverified = claims.some(c => !c.supported || c.status !== 'verified');
-      const hasUnverifiedClaims = unsupportedList.length > 0 || !hasSources || !hasVerifiableSourceUrl || foundTemplates.length > 0 || hasPlaceholders || hasAnyClaimUnverified;
+      const isCountSufficient = factsList.length === 0 || claims.length >= factsList.length;
+      const hasUnverifiedClaims = unsupportedList.length > 0 || !hasSources || !hasVerifiableSourceUrl || foundTemplates.length > 0 || hasPlaceholders || hasAnyClaimUnverified || !isCountSufficient;
       const passed = !hasUnverifiedClaims;
 
       const fallbackResult = {
@@ -601,8 +691,8 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus
         canPublish: passed,
         hasUnverifiedClaims,
         summary: hasUnverifiedClaims 
-          ? '⚠️ Perlu Verifikasi: Ditemukan klaim, data rujukan, atau URL sumber yang belum terverifikasi secara memadai oleh editor.' 
-          : '✅ Lolos Verifikasi Bersih: Seluruh klaim faktual, angka, entitas, dan rujukan sumber telah terverifikasi secara individual.',
+          ? `⚠️ Perlu Verifikasi: Ditemukan ${claims.filter(c => c.status !== 'verified').length} dari ${claims.length} butir klaim/data rujukan yang belum terverifikasi secara memadai.` 
+          : `✅ Lolos Verifikasi Bersih: Seluruh ${claims.length} butir klaim faktual, angka, entitas, dan rujukan sumber telah terverifikasi secara individual.`,
         unsupportedClaims: unsupportedList,
         missingSourceClaims,
         forbiddenKeywordsFound: foundForbidden,
