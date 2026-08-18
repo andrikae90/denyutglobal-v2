@@ -246,80 +246,162 @@ Kembalikan HANYA format JSON valid:
     }
   });
 
-  // Dedicated AI Fact-Checking Endpoint (Validasi Sebelum Publish)
-  app.post('/api/ai/fact-check', async (req, res) => {
-    try {
-      const {
-        title = '',
-        summary = '',
-        content = [],
-        facts = '',
-        roughNotes = '',
-        sources = [],
-        whyItMatters = ''
-      } = req.body;
+  // Shared Strict Fact-Checking Engine Implementation
+  async function performStrictFactCheck(body: any) {
+    const {
+      title = '',
+      judul = '',
+      summary = '',
+      ringkasan = '',
+      content = [],
+      isiLengkap = [],
+      facts = '',
+      faktaUtama = '',
+      roughNotes = '',
+      catatan = '',
+      sources = [],
+      daftarSumber = [],
+      whyItMatters = '',
+      category = '',
+      kategori = '',
+      location = '',
+      lokasi = ''
+    } = body || {};
 
-      const contentText = Array.isArray(content) ? content.join('\n\n') : String(content || '');
-      const validSources = Array.isArray(sources) 
-        ? sources.filter((s: any) => s && (s.name?.trim() || s.url?.trim())) 
-        : [];
+    const finalTitle = (title || judul || '').trim();
+    const finalSummary = (summary || ringkasan || '').trim();
+    const rawContent = Array.isArray(content) && content.length > 0 
+      ? content 
+      : (Array.isArray(isiLengkap) && isiLengkap.length > 0 ? isiLengkap : (content || isiLengkap || ''));
+    const contentParagraphs: string[] = Array.isArray(rawContent)
+      ? rawContent.map((p: any) => String(p || '').trim()).filter(Boolean)
+      : String(rawContent || '').split('\n\n').map(p => p.trim()).filter(Boolean);
+    const contentText = contentParagraphs.join('\n\n');
 
-      const forbiddenWords = ['terbukti', 'pasti', 'terbesar', 'bersejarah', 'memperkuat', 'menjadi bukti'];
-      const client = getGeminiClient();
+    const rawFacts = facts || faktaUtama || '';
+    const factsString = Array.isArray(rawFacts) ? rawFacts.join('\n') : String(rawFacts || '');
+    const factsList = factsString
+      .split('\n')
+      .map(f => f.trim().replace(/^[-*•0-9.]\s*/, ''))
+      .filter(Boolean);
 
-      if (client && (title.trim() || contentText.trim())) {
-        const factCheckPrompt = `Anda adalah Verifikator Fakta & Auditor Integritas Editorial di DenyutGlobal.
-Tugas Anda adalah memeriksa setiap klaim dalam draft artikel secara cermat sebelum diterbitkan.
+    const rawNotes = (roughNotes || catatan || '').trim();
+    const finalCategory = (category || kategori || 'Dunia').trim();
+    const finalLocation = (location || lokasi || '').trim();
 
-ATURAN FACT-CHECKING KETAT:
-1. Bedakan tiga jenis informasi:
-   - FAKTA: Informasi yang secara langsung didukung oleh fakta/data/catatan yang diberikan editor atau sumber yang dicantumkan.
-   - KONTEKS: Penjelasan tambahan yang membantu pembaca memahami fakta tanpa mengubah atau melebih-lebihkan fakta.
-   - OPINI/ANALISIS: Penilaian, interpretasi, atau kesimpulan (harus terpisah, tidak boleh disajikan sebagai fakta mutlak).
-2. Periksa apakah ada:
-   - Angka atau statistik yang tidak ada dalam bahan editor.
-   - Nama, tanggal, lokasi, atau kejadian yang tidak diberikan oleh editor.
-   - Kutipan yang tidak tercatat di catatan editor.
-   - Sumber buatan yang tidak dimasukkan editor.
-   - Penggunaan kata terlarang tanpa dasar data eksplisit: ["terbukti", "pasti", "terbesar", "bersejarah", "memperkuat", "menjadi bukti"].
-   - Klaim bahwa verifikasi sudah tuntas padahal data belum ada.
-   - Perubahan ketidakpastian menjadi kepastian.
-3. SUMBER:
-   - Setiap fakta penting harus dapat ditelusuri ke sumber yang dimasukkan editor.
-   - Jika tidak ada sumber yang mendukung suatu klaim, tandai: "Sumber belum tersedia — perlu verifikasi editor."
-   - Jangan membuat sumber pengganti.
+    const rawSources = Array.isArray(sources) && sources.length > 0 
+      ? sources 
+      : (Array.isArray(daftarSumber) ? daftarSumber : []);
+    
+    const validSources = rawSources
+      .filter((s: any) => s && (s.name?.trim() || s.url?.trim() || typeof s === 'string'))
+      .map((s: any) => {
+        if (typeof s === 'string') return { name: s.trim(), url: '', date: '', notes: '' };
+        return {
+          name: (s.name || s.namaSumber || s.title || '').trim(),
+          url: (s.url || s.urlSumber || s.link || '').trim(),
+          date: (s.date || s.waktu || '').trim(),
+          notes: (s.notes || s.catatan || '').trim()
+        };
+      });
 
-BAHAN YANG DIBERIKAN EDITOR (GROUND TRUTH):
-- Fakta Terverifikasi:
-${facts || '(Kosong)'}
+    const isUrlVerifiable = (urlStr: string) => {
+      if (!urlStr) return false;
+      const lower = urlStr.toLowerCase();
+      if (lower.includes('...') || lower.includes('example.com') || lower.includes('localhost') || lower === '#' || lower.includes('belum ada') || lower.includes('[url]')) {
+        return false;
+      }
+      try {
+        const parsed = new URL(urlStr);
+        return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname.includes('.');
+      } catch {
+        return false;
+      }
+    };
+
+    const hasVerifiableSourceUrl = validSources.some(s => isUrlVerifiable(s.url));
+    const forbiddenWords = ['terbukti', 'pasti', 'terbesar', 'bersejarah', 'spektakuler', 'menghebohkan', 'memperkuat', 'menjadi bukti'];
+
+    const client = getGeminiClient();
+
+    if (client && (finalTitle || contentText || factsList.length > 0)) {
+      const factCheckPrompt = `Anda adalah Verifikator Fakta & Auditor Integritas Editorial Independen di DenyutGlobal (media kredibel berbahasa Indonesia dengan standar verifikasi fakta tertinggi).
+Tugas Anda adalah melakukan audit investigatif dan verifikasi kebenaran secara ketat terhadap setiap klaim, angka, kutipan, dan sumber sebelum naskah diizinkan tayang.
+
+STANDAR & 10 ATURAN AUDIT KETAT DENYUTGLOBAL:
+
+1. PEMERIKSAAN KLAIM SECARA INDIVIDUAL:
+   - Setiap klaim fakta utama dalam naskah HARUS diperiksa dan dievaluasi satu per satu secara individual.
+   - Jangan menyimpulkan bahwa seluruh berita terverifikasi hanya karena satu atau sebagian klaim didukung sumber.
+
+2. VERIFIKASI SUMBER PRIMER & URL:
+   - Sumber primer hanya boleh dianggap TERKONFIRMASI ("status": "verified", "supported": true) jika URL sumber dapat diverifikasi secara valid dan isi sumber benar-benar membuktikan klaim tersebut.
+   - Jika URL sumber tidak tersedia, kosong, tidak dapat diakses, 404, gagal diambil, berupa placeholder ("URL belum ada", "http://..."), atau isi sumber tidak cukup membuktikan klaim, JANGAN beri status TERKONFIRMASI. Beri status "needs_verification" atau "missing_source" dengan "supported": false.
+
+3. VERIFIKASI INDIVIDUAL ATAS DATA SPESIFIK:
+   - Angka, tanggal, waktu kronologi, lokasi, kapasitas, persentase, nominal, nama lembaga, nama proyek, dan nama tokoh/narasumber harus diverifikasi secara individual terhadap rujukan bahan editor.
+   - Jika terdapat angka atau entitas krusial dalam naskah yang tidak tercantum dalam Fakta Terverifikasi / Catatan Editor, tandai sebagai klaim tanpa data rujukan.
+
+4. KESELARASAN JUDUL DENGAN FAKTA (EDITORIAL INTEGRITY):
+   - Periksa apakah Judul sesuai dengan fakta utama dalam isi naskah.
+   - Jika judul tidak sesuai, hiperbolis, clickbait, membesar-besarkan fakta, atau memuat klaim yang bertentangan dengan isi naskah, tandai sebagai masalah editorial ("unsupportedClaims").
+
+5. DETEKSI KONFLIK FAKTA:
+   - Jika sumber resmi yang tersedia bertentangan dengan klaim dalam naskah, tandai secara eksplisit sebagai "KONFLIK FAKTA" di dalam daftar conflictWarnings dan jangan memilih salah satu secara otomatis.
+
+6. DILARANG MENGARANG:
+   - Dilarang keras mengarang fakta, angka, kutipan, URL, nama, tanggal, atau detail yang tidak ditemukan dalam bahan dasar.
+
+7. PANTANGAN TEMPLATE & KATA TERLARANG:
+   - Periksa apakah ada penggunaan kata terlarang tanpa dasar data eksplisit: ["terbukti", "pasti", "terbesar", "bersejarah", "spektakuler", "menghebohkan", "memperkuat", "menjadi bukti"].
+   - Periksa apakah ada kalimat template internal redaksi (seperti "sedang dalam penelaahan redaksi", "feed kawat resmi", "transformasi naskah", "denyutglobal menerapkan prinsip transparansi", "editor mencatat", dll).
+   - Periksa apakah ada tanda placeholder atau elipsis ("...", "[...]", "[isi]", "[nama]", "[tanggal]", "[lokasi]").
+
+8. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
+   - Status "LOLOS VERIFIKASI BERSIH" ("passed": true, "canPublish": true, "hasUnverifiedClaims": false) HANYA BOLEH DIBERIKAN jika:
+     a) SEMUA klaim utama yang diaudit memiliki dukungan sumber rujukan yang valid dan memadai;
+     b) Setidaknya satu sumber memiliki URL yang valid dan dapat diverifikasi;
+     c) Judul selaras dengan fakta utama;
+     d) Tidak ada konflik fakta;
+     e) Tidak ada data angka/tokoh/lokasi yang tidak terverifikasi;
+     f) Tidak ada kata terlarang, kalimat template, atau placeholder.
+   - Jika terdapat SATU SAJA klaim utama yang belum didukung sumber atau URL-nya tidak valid, maka status keseluruhan WAJIB "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
+
+BAHAN ACUAN EDITOR (GROUND TRUTH):
+- Fakta Utama Terverifikasi:
+${factsString || '(Belum ada poin fakta spesifik)'}
 - Catatan Tambahan Editor:
-${roughNotes || '(Kosong)'}
-- Daftar Sumber yang Dimasukkan Editor:
-${validSources.length > 0 ? validSources.map((s: any) => `- ${s.name || 'Sumber'} (${s.url || ''})`).join('\n') : '(Tidak ada sumber)'}
+${rawNotes || '(Kosong)'}
+- Daftar Sumber Rujukan Terdaftar:
+${validSources.length > 0 ? validSources.map((s: any) => `- ${s.name || 'Sumber'} | URL: ${s.url || '(URL belum ada/tidak valid)'} | Catatan: ${s.notes || '-'}`).join('\n') : '(Tidak ada sumber)'}
 
-DRAFT ARTIKEL YANG DIPERIKSA:
-- Judul: ${title}
-- Ringkasan: ${summary}
-- Mengapa Penting: ${whyItMatters}
+NASKAH YANG DI-AUDIT:
+- Judul: ${finalTitle || '(Kosong)'}
+- Rubrik: ${finalCategory}
+- Lokasi: ${finalLocation || 'Internasional'}
+- Ringkasan: ${finalSummary || '(Kosong)'}
+- Mengapa Penting: ${whyItMatters || '(Kosong)'}
 - Isi Lengkap:
-${contentText}
+${contentText || '(Kosong)'}
 
-KEMBALIKAN DALAM FORMAT JSON BERIKUT (tanpa pembungkus markdown lain):
+KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus lain):
 {
-  "passed": boolean (true jika semua klaim terdukung dengan baik dan tidak ada fabrikasi angka/kutipan/kata terlarang),
-  "canPublish": boolean (true hanya jika passed = true dan sumber tersedia),
-  "hasUnverifiedClaims": boolean (true jika ada klaim/angka/kutipan/kata terlarang yang perlu diperiksa),
-  "summary": "string (Evaluasi ringkas mengenai integritas naskah)",
-  "unsupportedClaims": ["string (Daftar klaim spesifik yang tidak didukung data editor)"],
-  "missingSourceClaims": ["string (Daftar klaim yang kekurangan sumber rujukan terdaftar)"],
+  "passed": boolean,
+  "canPublish": boolean,
+  "hasUnverifiedClaims": boolean,
+  "summary": "string (Evaluasi ringkas mengenai integritas naskah dan status audit)",
+  "unsupportedClaims": ["string (Daftar klaim spesifik/angka/judul yang tidak didukung data rujukan)"],
+  "missingSourceClaims": ["string (Daftar klaim yang kekurangan sumber rujukan valid atau URL tidak dapat diverifikasi)"],
   "forbiddenKeywordsFound": ["string (Kata terlarang seperti 'terbukti', 'pasti', dsb yang muncul tanpa rujukan data)"],
+  "conflictWarnings": ["string (Klaim yang berkonflik dengan sumber resmi jika ditemukan)"],
   "claims": [
     {
-      "claim": "string (Pernyataan dalam artikel)",
+      "id": "claim-1",
+      "claim": "string (Pernyataan klaim spesifik dalam naskah)",
       "type": "fakta" | "konteks" | "opini_analisis",
       "supported": boolean,
-      "sourceTrace": "string (Nama sumber atau 'Sumber belum tersedia — perlu verifikasi editor.')",
-      "issue": "string jika ada masalah atau kosong",
+      "sourceTrace": "string (Nama sumber terdaftar atau 'Sumber belum tersedia — perlu verifikasi editor.')",
+      "issue": "string jika ada catatan masalah atau kosong",
       "status": "verified" | "needs_verification" | "missing_source"
     }
   ],
@@ -331,40 +413,74 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (tanpa pembungkus markdown lain):
   }
 }`;
 
-        let response: any = null;
         try {
-          response = await client.models.generateContent({
+          const response = await client.models.generateContent({
             model: 'gemini-3.7-flash',
             contents: factCheckPrompt,
             config: {
               responseMimeType: 'application/json'
             }
           });
-        } catch (apiErr: any) {
-          console.warn('Gemini 3.7 flash unavailable or high demand, switching directly to heuristic fact checker:', apiErr?.message || apiErr);
-        }
 
-        if (response && response.text) {
-          const textOut = response.text || '';
-          try {
-            const parsed = JSON.parse(textOut);
-            return res.json({
+          if (response && response.text) {
+            const parsed = JSON.parse(response.text);
+
+            // Double check strict criteria post-LLM to ensure safety
+            const claims = Array.isArray(parsed.claims) ? parsed.claims : [];
+            const hasAnyUnverified = claims.some((c: any) => !c.supported || c.status !== 'verified');
+            const hasMissingSources = !validSources.length || !hasVerifiableSourceUrl;
+            const hasUnsupported = Array.isArray(parsed.unsupportedClaims) && parsed.unsupportedClaims.length > 0;
+            const hasConflicts = Array.isArray(parsed.conflictWarnings) && parsed.conflictWarnings.length > 0;
+
+            const strictPassed = Boolean(parsed.passed && !hasAnyUnverified && !hasMissingSources && !hasUnsupported && !hasConflicts);
+
+            const finalResult = {
+              passed: strictPassed,
+              canPublish: strictPassed,
+              hasUnverifiedClaims: !strictPassed,
+              summary: strictPassed
+                ? '✅ Lolos Verifikasi Bersih: Seluruh klaim faktual, data angka, dan rujukan sumber telah terverifikasi secara individual.'
+                : (parsed.summary || '⚠️ Perlu Verifikasi Editor: Ditemukan klaim, data rujukan, atau URL sumber yang belum terverifikasi secara memadai.'),
+              unsupportedClaims: Array.isArray(parsed.unsupportedClaims) ? parsed.unsupportedClaims : [],
+              missingSourceClaims: Array.isArray(parsed.missingSourceClaims) ? parsed.missingSourceClaims : (hasMissingSources ? ['URL sumber rujukan belum terdaftar atau tidak dapat diverifikasi.'] : []),
+              forbiddenKeywordsFound: Array.isArray(parsed.forbiddenKeywordsFound) ? parsed.forbiddenKeywordsFound : [],
+              conflictWarnings: Array.isArray(parsed.conflictWarnings) ? parsed.conflictWarnings : [],
+              claims: claims.map((c: any, idx: number) => ({
+                id: c.id || `claim-${idx + 1}`,
+                claim: c.claim || '',
+                type: c.type || 'fakta',
+                supported: Boolean(c.supported && hasVerifiableSourceUrl),
+                sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
+                issue: c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : undefined),
+                status: (c.status === 'verified' && hasVerifiableSourceUrl) ? 'verified' : (c.status || 'needs_verification')
+              })),
+              sourceAudit: {
+                totalSources: validSources.length,
+                sourcesProvided: validSources.length > 0,
+                sourcesTraceable: hasVerifiableSourceUrl,
+                note: hasVerifiableSourceUrl
+                  ? `${validSources.length} sumber rujukan terdaftar dengan tautan terverifikasi.`
+                  : (validSources.length > 0 ? 'Sumber terdaftar tetapi belum memiliki URL yang dapat diverifikasi.' : 'Sumber rujukan belum dicantumkan.')
+              },
+              checkedAt: new Date().toISOString(),
+              checkedBy: 'Redaksi DenyutGlobal (Audit AI Gemini)'
+            };
+
+            return {
               success: true,
               source: 'gemini',
-              result: {
-                ...parsed,
-                checkedAt: new Date().toISOString()
-              }
-            });
-          } catch (pe) {
-            console.warn('Failed to parse Gemini Fact-Check JSON, using robust algorithmic evaluator', pe);
+              result: finalResult,
+              ...finalResult
+            };
           }
+        } catch (apiErr: any) {
+          console.warn('Gemini fact-check engine fallback to deterministic auditor:', apiErr?.message || apiErr);
         }
       }
 
       // Robust Algorithmic Fact-Checker (Offline & Fallback Evaluator)
-      const fullText = `${title} ${summary} ${whyItMatters} ${contentText}`.toLowerCase();
-      const editorGroundText = `${facts} ${roughNotes}`.toLowerCase();
+      const fullText = `${finalTitle} ${finalSummary} ${whyItMatters} ${contentText}`.toLowerCase();
+      const editorGroundText = `${factsString} ${rawNotes}`.toLowerCase();
 
       const forbiddenTemplatePhrases = [
         'sedang dalam penelaahan redaksi',
@@ -410,6 +526,7 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (tanpa pembungkus markdown lain):
 
       const hasSources = validSources.length > 0;
       const unsupportedList: string[] = [];
+      const conflictList: string[] = [];
 
       if (foundTemplates.length > 0) {
         unsupportedList.push(`Memuat kalimat template internal yang dilarang: "${foundTemplates.join('", "')}".`);
@@ -420,29 +537,37 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (tanpa pembungkus markdown lain):
       if (foundForbidden.length > 0) {
         unsupportedList.push(`Penggunaan kata tanpa pembuktian data langsung: "${foundForbidden.join('", "')}".`);
       }
-      if (ungroundedNumbers.length > 0 && !facts.trim()) {
+      if (ungroundedNumbers.length > 0 && !factsString.trim()) {
         unsupportedList.push(`Terdapat angka/data kuantitatif (${ungroundedNumbers.slice(0, 3).join(', ')}) yang tidak tercantum dalam Fakta Utama editor.`);
       }
-      if (ungroundedQuotes.length > 0 && !roughNotes.trim()) {
+      if (ungroundedQuotes.length > 0 && !rawNotes.trim()) {
         unsupportedList.push(`Terdapat kutipan langsung yang tidak tercantum dalam catatan narasumber editor.`);
+      }
+
+      // Check title consistency with facts
+      if (finalTitle && factsList.length > 0) {
+        const titleWords = finalTitle.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+        const groundWords = editorGroundText.split(/\s+/).filter(w => w.length > 4);
+        const matchCount = titleWords.filter(w => groundWords.some(gw => gw.includes(w) || w.includes(gw))).length;
+        if (titleWords.length >= 3 && matchCount === 0) {
+          unsupportedList.push('Judul memuat fokus yang berbeda signifikan dari poin fakta utama terverifikasi (potensi ketidaksesuaian editorial).');
+        }
       }
 
       const missingSourceClaims: string[] = [];
       if (!hasSources) {
-        missingSourceClaims.push('Seluruh klaim berita: Sumber belum tersedia — perlu verifikasi editor.');
+        missingSourceClaims.push('Sumber rujukan belum dicantumkan. Setiap fakta penting harus dapat ditelusuri ke sumber rujukan.');
+      } else if (!hasVerifiableSourceUrl) {
+        missingSourceClaims.push('Sumber rujukan belum memiliki URL valid yang dapat diverifikasi.');
       }
 
-      const hasUnverifiedClaims = unsupportedList.length > 0 || !hasSources || foundTemplates.length > 0 || hasPlaceholders;
-      const passed = !hasUnverifiedClaims;
+      // Extract individual claims
+      const candidateSentences = [
+        ...factsList,
+        ...contentParagraphs.flatMap(p => p.split(/[.\n]/).map(s => s.trim()).filter(s => s.length > 25))
+      ].slice(0, 8);
 
-      // Extract sample claims
-      const sentences = contentText
-        .split(/[.\n]/)
-        .map(s => s.trim())
-        .filter(s => s.length > 20)
-        .slice(0, 6);
-
-      const claims = sentences.map((st, idx) => {
+      const claims = candidateSentences.map((st, idx) => {
         let type: 'fakta' | 'konteks' | 'opini_analisis' = 'fakta';
         if (st.toLowerCase().includes('karena') || st.toLowerCase().includes('sehingga') || st.toLowerCase().includes('latar belakang')) {
           type = 'konteks';
@@ -450,52 +575,84 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT (tanpa pembungkus markdown lain):
           type = 'opini_analisis';
         }
 
-        const isUnverified = foundForbidden.some(w => st.toLowerCase().includes(w));
-        const status = isUnverified 
-          ? 'needs_verification' 
-          : (!hasSources ? 'missing_source' : 'verified');
+        const isUnverifiedWord = foundForbidden.some(w => st.toLowerCase().includes(w));
+        const isSupported = hasSources && hasVerifiableSourceUrl && !isUnverifiedWord && !hasPlaceholders;
+        const status = isSupported ? 'verified' : (!hasSources || !hasVerifiableSourceUrl ? 'missing_source' : 'needs_verification');
 
         return {
-          id: `claim-${idx}`,
+          id: `claim-${idx + 1}`,
           claim: st,
           type,
-          supported: !isUnverified,
-          sourceTrace: hasSources ? (validSources[0].name || 'Sumber Terdaftar') : 'Sumber belum tersedia — perlu verifikasi editor.',
-          issue: isUnverified ? 'Memuat kata yang perlu bukti data konkret' : undefined,
+          supported: isSupported,
+          sourceTrace: (hasSources && hasVerifiableSourceUrl) 
+            ? `${validSources[0].name} (${validSources[0].url})` 
+            : (hasSources ? `${validSources[0].name} (URL belum terverifikasi)` : 'Sumber belum tersedia — perlu verifikasi editor.'),
+          issue: !isSupported ? (!hasVerifiableSourceUrl ? 'URL sumber rujukan belum valid' : 'Memerlukan rujukan data pendukung terdaftar') : undefined,
           status
         };
       });
 
-      return res.json({
+      const hasAnyClaimUnverified = claims.some(c => !c.supported || c.status !== 'verified');
+      const hasUnverifiedClaims = unsupportedList.length > 0 || !hasSources || !hasVerifiableSourceUrl || foundTemplates.length > 0 || hasPlaceholders || hasAnyClaimUnverified;
+      const passed = !hasUnverifiedClaims;
+
+      const fallbackResult = {
+        passed,
+        canPublish: passed,
+        hasUnverifiedClaims,
+        summary: hasUnverifiedClaims 
+          ? '⚠️ Perlu Verifikasi: Ditemukan klaim, data rujukan, atau URL sumber yang belum terverifikasi secara memadai oleh editor.' 
+          : '✅ Lolos Verifikasi Bersih: Seluruh klaim faktual, angka, entitas, dan rujukan sumber telah terverifikasi secara individual.',
+        unsupportedClaims: unsupportedList,
+        missingSourceClaims,
+        forbiddenKeywordsFound: foundForbidden,
+        conflictWarnings: conflictList,
+        claims,
+        sourceAudit: {
+          totalSources: validSources.length,
+          sourcesProvided: hasSources,
+          sourcesTraceable: hasVerifiableSourceUrl,
+          note: hasVerifiableSourceUrl 
+            ? `${validSources.length} sumber referensi terverifikasi terdaftar.` 
+            : (hasSources ? 'Sumber terdaftar tetapi belum memiliki URL yang dapat diverifikasi.' : 'Sumber belum tersedia — perlu verifikasi editor.')
+        },
+        checkedAt: new Date().toISOString(),
+        checkedBy: 'Redaksi DenyutGlobal (Audit Heuristik Ketat)'
+      };
+
+      return {
         success: true,
         source: 'heuristic',
-        result: {
-          passed,
-          canPublish: passed,
-          hasUnverifiedClaims,
-          summary: hasUnverifiedClaims 
-            ? '⚠️ Perlu Verifikasi: Ditemukan klaim, kata superlatif, atau ketiadaan sumber yang perlu ditinjau oleh editor sebelum publikasi.' 
-            : 'Seluruh klaim faktual, konteks, dan analisis telah selaras dengan bahan terverifikasi editor.',
-          unsupportedClaims: unsupportedList,
-          missingSourceClaims,
-          forbiddenKeywordsFound: foundForbidden,
-          claims,
-          sourceAudit: {
-            totalSources: validSources.length,
-            sourcesProvided: hasSources,
-            sourcesTraceable: hasSources,
-            note: hasSources 
-              ? `${validSources.length} sumber referensi terverifikasi terdaftar.` 
-              : 'Sumber belum tersedia — perlu verifikasi editor.'
-          },
-          checkedAt: new Date().toISOString()
-        }
-      });
+        result: fallbackResult,
+        ...fallbackResult
+      };
+  }
 
+  // Dedicated AI Fact-Checking Endpoint (Validasi Sebelum Publish)
+  app.post('/api/ai/fact-check', async (req, res) => {
+    try {
+      const responseData = await performStrictFactCheck(req.body);
+      return res.json(responseData);
     } catch (err: any) {
-      console.error('Fact Check Error:', err);
+      console.error('Fact Check Error (/api/ai/fact-check):', err);
       return res.status(500).json({
+        success: false,
         error: 'Terjadi kendala saat melakukan pemeriksaan fakta.',
+        details: err.message
+      });
+    }
+  });
+
+  // Dedicated Editorial Fact-Verification Endpoint (/api/editorial/verify-facts)
+  app.post('/api/editorial/verify-facts', async (req, res) => {
+    try {
+      const responseData = await performStrictFactCheck(req.body);
+      return res.json(responseData);
+    } catch (err: any) {
+      console.error('Fact Check Error (/api/editorial/verify-facts):', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Terjadi kendala saat melakukan verifikasi fakta editorial.',
         details: err.message
       });
     }
