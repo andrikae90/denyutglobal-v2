@@ -310,6 +310,7 @@ export const INITIAL_EDITORIAL_ARTICLES: NewsItem[] = [
 export class EditorialStore {
   private static instance: EditorialStore;
   private articles: NewsItem[] = [];
+  private isInitializedFromApi = false;
 
   private constructor() {
     this.loadFromStorage();
@@ -322,28 +323,54 @@ export class EditorialStore {
     return EditorialStore.instance;
   }
 
-  private loadFromStorage() {
-    try {
-      const data = localStorage.getItem(STORAGE_KEY);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.articles = parsed;
-          return;
-        }
+  /**
+   * Helper untuk membaca token otorisasi redaksi dari sessionStorage dengan aman
+   */
+  private getAuthToken(token?: string): string {
+    if (token) return token;
+    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+      try {
+        return sessionStorage.getItem('denyutglobal_editorial_token') || '';
+      } catch {
+        return '';
       }
-    } catch (e) {
-      console.warn('Failed to load editorial articles from localStorage', e);
+    }
+    return '';
+  }
+
+  /**
+   * Membaca artikel dari localStorage (cache / fallback offline)
+   */
+  public loadFromStorage(): NewsItem[] {
+    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      try {
+        const data = localStorage.getItem(STORAGE_KEY);
+        if (data) {
+          const parsed = JSON.parse(data);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this.articles = parsed;
+            return this.articles;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load editorial articles from localStorage', e);
+      }
     }
     this.articles = [...INITIAL_EDITORIAL_ARTICLES];
     this.saveToStorage();
+    return this.articles;
   }
 
-  private saveToStorage() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.articles));
-    } catch (e) {
-      console.error('Failed to save editorial articles to localStorage', e);
+  /**
+   * Menyimpan salinan ke localStorage sebagai offline cache
+   */
+  public saveToStorage() {
+    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.articles));
+      } catch (e) {
+        console.error('Failed to save editorial articles to localStorage', e);
+      }
     }
   }
 
@@ -352,7 +379,7 @@ export class EditorialStore {
   }
 
   /**
-   * Only returns articles that are strictly reviewed and published for public readers
+   * Hanya mengembalikan artikel terverifikasi dan berstatus published untuk pembaca publik
    */
   public getPublishedArticles(): NewsItem[] {
     return this.articles.filter(
@@ -362,6 +389,185 @@ export class EditorialStore {
 
   public getArticleById(id: string): NewsItem | undefined {
     return this.articles.find((item) => item.id === id);
+  }
+
+  /**
+   * Mengambil artikel publik dari API server D1 secara asinkron
+   * Memperbarui cache memori dan localStorage secara otomatis.
+   */
+  public async fetchPublishedArticlesFromApi(): Promise<NewsItem[]> {
+    try {
+      const res = await fetch('/api/articles');
+      if (res.ok) {
+        const json = await res.json();
+        const apiArticles: NewsItem[] = json.data || (Array.isArray(json) ? json : []);
+        if (apiArticles.length > 0) {
+          // Merge API articles with current local drafts
+          const nonPublished = this.articles.filter(a => a.status !== 'published' || !a.reviewed);
+          this.articles = [...apiArticles, ...nonPublished];
+          this.saveToStorage();
+          this.isInitializedFromApi = true;
+          return this.getPublishedArticles();
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch public articles from API, using cached fallback:', e);
+    }
+    return this.getPublishedArticles();
+  }
+
+  /**
+   * Mengambil detail artikel tunggal dari API berdasarkan slug
+   */
+  public async fetchArticleBySlugFromApi(slug: string): Promise<NewsItem | undefined> {
+    try {
+      const res = await fetch(`/api/articles/${encodeURIComponent(slug)}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const fetched: NewsItem = json.data;
+          // Update cache if found
+          const idx = this.articles.findIndex(a => a.id === fetched.id || a.slug === fetched.slug);
+          if (idx >= 0) {
+            this.articles[idx] = fetched;
+          } else {
+            this.articles.unshift(fetched);
+          }
+          this.saveToStorage();
+          return fetched;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch article by slug from API, looking in local cache:', e);
+    }
+    return this.articles.find(a => a.slug === slug || a.id === slug);
+  }
+
+  /**
+   * Mengambil semua artikel redaksi (termasuk draft/review) dari API
+   */
+  public async fetchEditorialArticlesFromApi(token?: string): Promise<NewsItem[]> {
+    try {
+      const authToken = this.getAuthToken(token);
+      const headers: Record<string, string> = {};
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      const res = await fetch('/api/editorial/articles', { headers });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          this.articles = json.data;
+          this.saveToStorage();
+          this.isInitializedFromApi = true;
+          return [...this.articles];
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch editorial articles from API, fallback to local store:', e);
+    }
+    return [...this.articles];
+  }
+
+  /**
+   * Sinkronisasi Batch dari LocalStorage ke Server D1 (Idempotent Migration)
+   */
+  public async syncLocalToApi(token?: string): Promise<{ success: boolean; message: string; count?: number }> {
+    try {
+      const authToken = this.getAuthToken(token);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      const res = await fetch('/api/editorial/sync-batch', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ articles: this.articles })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          this.articles = json.data;
+          this.saveToStorage();
+          return { success: true, message: json.message || 'Sinkronisasi berhasil', count: json.total };
+        }
+      }
+      return { success: false, message: 'Gagal melakukan sinkronisasi dengan server.' };
+    } catch (e: any) {
+      console.error('Sync batch error:', e);
+      return { success: false, message: e?.message || 'Koneksi ke server terputus.' };
+    }
+  }
+
+  /**
+   * Simpan artikel (Asinkron API-First dengan fallback sinkron ke LocalStorage)
+   */
+  public async saveArticleToApi(article: NewsItem, token?: string): Promise<NewsItem> {
+    // 1. Simpan ke local memori & storage terlebih dahulu agar UI instan
+    const savedLocal = this.saveArticle(article);
+
+    // 2. Simpan ke backend API D1
+    try {
+      const authToken = this.getAuthToken(token);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      const res = await fetch('/api/editorial/articles', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(savedLocal)
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const idx = this.articles.findIndex(a => a.id === json.data.id);
+          if (idx >= 0) {
+            this.articles[idx] = json.data;
+          }
+          this.saveToStorage();
+          return json.data;
+        }
+      }
+    } catch (e) {
+      console.warn('API save failed, article kept in offline local storage:', e);
+    }
+
+    return savedLocal;
+  }
+
+  /**
+   * Hapus artikel (Asinkron API-First dengan update LocalStorage)
+   */
+  public async deleteArticleFromApi(id: string, token?: string): Promise<boolean> {
+    this.deleteArticle(id);
+
+    try {
+      const authToken = this.getAuthToken(token);
+      const headers: Record<string, string> = {};
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      const res = await fetch(`/api/editorial/articles/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers
+      });
+
+      return res.ok;
+    } catch (e) {
+      console.warn('API delete failed, removed locally:', e);
+      return true;
+    }
   }
 
   public saveArticle(article: NewsItem): NewsItem {

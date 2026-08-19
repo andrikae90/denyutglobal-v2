@@ -57,7 +57,8 @@ import {
   Copy,
   CheckCheck,
   Camera,
-  Upload
+  Upload,
+  Link2
 } from 'lucide-react';
 
 interface EditorModalProps {
@@ -2357,6 +2358,87 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                     </div>
                   </div>
 
+                  {/* Source Access & Verification Audit Box */}
+                  <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Link2 className="w-4 h-4 text-blue-600" />
+                        <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          Audit Akses Sumber Rujukan & Integritas Dokumen
+                        </h5>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        factCheckResult.sourceAudit?.sourceContentFetched
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : (factCheckResult.sourceAudit?.sourcesTraceable
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-rose-100 text-rose-800')
+                      }`}>
+                        {factCheckResult.sourceAudit?.sourceContentFetched
+                          ? 'ISI SUMBER BERHASIL DIAMBIL'
+                          : (factCheckResult.sourceAudit?.sourcesTraceable
+                              ? 'SUMBER TIDAK DAPAT DIAKSES (TEKNIS)'
+                              : 'SUMBER BELUM TERDAFTAR')}
+                      </span>
+                    </div>
+
+                    <div className="text-xs space-y-2 text-slate-700">
+                      <p className="text-slate-600 leading-relaxed">
+                        {factCheckResult.sourceAudit?.note || 'Pemeriksaan integritas tautan sumber rujukan naskah.'}
+                      </p>
+
+                      {/* Source items detail list */}
+                      {factCheckResult.sourceAudit?.sourceStatuses && factCheckResult.sourceAudit.sourceStatuses.length > 0 && (
+                        <div className="mt-2 space-y-1.5 pt-2 border-t border-slate-100">
+                          <span className="text-[10px] font-bold uppercase text-slate-500 block">Status Tiap Sumber:</span>
+                          {factCheckResult.sourceAudit.sourceStatuses.map((srcItem, sIdx) => (
+                            <div key={sIdx} className="p-2 bg-slate-50 border border-slate-100 rounded-lg flex items-start justify-between gap-2 text-[11px]">
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-slate-800">{srcItem.name}</span>
+                                {srcItem.url && (
+                                  <div className="text-slate-500 truncate max-w-sm font-mono text-[10px]">
+                                    {srcItem.url}
+                                  </div>
+                                )}
+                                {srcItem.technicalError && (
+                                  <div className="text-amber-800 text-[10px] font-medium">
+                                    Kendala Teknis: {srcItem.technicalError}
+                                  </div>
+                                )}
+                              </div>
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-bold shrink-0 ${
+                                srcItem.status === 'terverifikasi_mendukung'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : srcItem.status === 'sumber_tidak_dapat_diakses'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : srcItem.status === 'tidak_mendukung'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {srcItem.status === 'sumber_tidak_dapat_diakses'
+                                  ? 'SUMBER TIDAK DAPAT DIAKSES'
+                                  : (srcItem.statusLabel || srcItem.status)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Explicit editorial notice on technical 404 */}
+                      {factCheckResult.sourceAudit?.sourceFetchFailures && factCheckResult.sourceAudit.sourceFetchFailures.length > 0 && (
+                        <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-[11px] text-blue-900 space-y-1">
+                          <div className="font-bold flex items-center gap-1.5">
+                            <Info className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Kaidah Penilaian Teknis DenyutGlobal:</span>
+                          </div>
+                          <p className="text-blue-800 text-[10.5px] leading-relaxed">
+                            Kegagalan akses web (seperti HTTP 404, batas bot, atau waktu koneksi habis) <strong>TIDAK dianggap sebagai bukti bahwa fakta naskah salah atau bohong</strong>. Status ditetapkan sebagai "Menunggu Verifikasi Sumber" agar editor dapat melakukan konfirmasi secara manual atau memperbarui URL rujukan.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Visual / Illustration Audit Status Box (BAGIAN 14) */}
                   <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -2436,30 +2518,53 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                         Rincian Audit Klaim Naskah ({factCheckResult.claims.length} Kalimat Ditelaah)
                       </h5>
                       <div className="divide-y divide-slate-100">
-                        {factCheckResult.claims.map((claim, idx) => (
-                          <div key={idx} className="py-2.5 flex items-start justify-between gap-3 text-xs">
-                            <div className="space-y-1">
-                              <p className="text-slate-800">{claim.claim}</p>
-                              <div className="flex items-center gap-2 text-[11px]">
-                                <span className={`px-2 py-0.5 rounded font-bold uppercase text-[9px] ${
-                                  claim.type === 'fakta' 
-                                    ? 'bg-blue-100 text-blue-800' 
-                                    : claim.type === 'konteks'
-                                    ? 'bg-purple-100 text-purple-800'
-                                    : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {claim.type}
-                                </span>
-                                <span className="text-slate-500">Rujukan: {claim.sourceTrace || 'Sumber terdaftar'}</span>
+                        {factCheckResult.claims.map((claim, idx) => {
+                          const isInaccessible = claim.status === 'pending_source_verification' || claim.sourceStatus === 'sumber_tidak_dapat_diakses';
+                          const isVerified = claim.supported && claim.status === 'verified';
+                          const isMissingSource = claim.status === 'missing_source';
+
+                          return (
+                            <div key={idx} className="py-2.5 flex items-start justify-between gap-3 text-xs">
+                              <div className="space-y-1">
+                                <p className="text-slate-800">{claim.claim}</p>
+                                <div className="flex items-center flex-wrap gap-2 text-[11px]">
+                                  <span className={`px-2 py-0.5 rounded font-bold uppercase text-[9px] ${
+                                    claim.type === 'fakta' 
+                                      ? 'bg-blue-100 text-blue-800' 
+                                      : claim.type === 'konteks'
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {claim.type}
+                                  </span>
+                                  <span className="text-slate-500">Rujukan: {claim.sourceTrace || 'Sumber terdaftar'}</span>
+                                  {claim.issue && (
+                                    <span className="text-amber-800 font-medium block w-full text-[10.5px]">
+                                      • {claim.issue}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
+                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold shrink-0 text-center ${
+                                isVerified
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : isInaccessible
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                  : isMissingSource
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {isVerified
+                                  ? 'Terverifikasi Didukung'
+                                  : isInaccessible
+                                  ? 'Menunggu Verifikasi Sumber'
+                                  : isMissingSource
+                                  ? 'Sumber Belum Ada'
+                                  : 'Perlu Verifikasi Data'}
+                              </span>
                             </div>
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
-                              claim.supported ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              {claim.supported ? 'Didukung' : 'Belum Didukung'}
-                            </span>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}

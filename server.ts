@@ -1,16 +1,468 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
+import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
+import { NewsItem } from './src/types';
+
+// =====================================================================
+// DENYUTGLOBAL V2 - SERVER ARTICLE PERSISTENCE ADAPTER (D1 / SQL COMPATIBLE)
+// =====================================================================
+const DB_STORAGE_FILE = path.join(process.cwd(), 'data_articles_server.json');
+
+// In-Memory Cache synced with disk / D1 adapter
+let serverArticles: NewsItem[] = [];
+
+function loadServerArticles(): NewsItem[] {
+  try {
+    if (fs.existsSync(DB_STORAGE_FILE)) {
+      const raw = fs.readFileSync(DB_STORAGE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not read persistent articles file, using default seed:', e);
+  }
+  // Initialize with initial editorial articles if empty
+  return [...INITIAL_EDITORIAL_ARTICLES];
+}
+
+function saveServerArticles(items: NewsItem[]): boolean {
+  try {
+    serverArticles = items;
+    fs.writeFileSync(DB_STORAGE_FILE, JSON.stringify(items, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('Error saving articles to server storage:', e);
+    return false;
+  }
+}
+
+// Initialize on server boot
+serverArticles = loadServerArticles();
+
+// Helper to convert row / data to standard NewsItem
+function normalizeNewsItem(item: any): NewsItem {
+  const id = item.id || `art-${Date.now()}`;
+  const title = (item.title || item.judul || '').trim();
+  const summary = (item.summary || item.ringkasan || '').trim();
+  const slug = (item.slug || '').trim() || id;
+
+  const contentArray: string[] = Array.isArray(item.content)
+    ? item.content
+    : (Array.isArray(item.isiLengkap) ? item.isiLengkap : (typeof item.content === 'string' ? [item.content] : []));
+
+  const factsArray: string[] = Array.isArray(item.facts) ? item.facts : [];
+
+  return {
+    ...item,
+    id,
+    title,
+    judul: title,
+    slug,
+    summary,
+    ringkasan: summary,
+    content: contentArray,
+    isiLengkap: contentArray,
+    facts: factsArray,
+    category: item.category || item.kategori || 'dunia',
+    kategori: item.kategori || item.category || 'dunia',
+    categoryLabel: item.categoryLabel || item.kategoriLabel || 'Dunia',
+    kategoriLabel: item.kategoriLabel || item.categoryLabel || 'Dunia',
+    location: item.location || item.negaraLokasi || 'Internasional',
+    negaraLokasi: item.negaraLokasi || item.location || 'Internasional',
+    author: item.author || 'Redaksi DenyutGlobal',
+    publishedAt: item.publishedAt,
+    tanggal: item.tanggal || new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+    waktu: item.waktu || `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')} WIB`,
+    status: item.status || 'draft',
+    reviewed: Boolean(item.reviewed),
+    image: item.image || item.gambar || '',
+    gambar: item.gambar || item.image || '',
+    captionGambar: item.captionGambar || '',
+    imageType: item.imageType || 'none',
+    imageCredit: item.imageCredit || '',
+    sources: Array.isArray(item.sources) ? item.sources : [],
+    sourceUrls: Array.isArray(item.sourceUrls) ? item.sourceUrls : [],
+    isEditorial: item.isEditorial !== false
+  };
+}
+
+// Helper to convert DB row to standard NewsItem
+function rowToNewsItem(row: any): NewsItem {
+  if (!row) return row;
+  let content: string[] = [];
+  try {
+    content = row.content_json ? JSON.parse(row.content_json) : [];
+  } catch {
+    content = row.content_json ? [row.content_json] : [];
+  }
+
+  let facts: string[] = [];
+  try {
+    facts = row.facts_json ? JSON.parse(row.facts_json) : [];
+  } catch {}
+
+  let sources: any[] = [];
+  try {
+    sources = row.sources_json ? JSON.parse(row.sources_json) : [];
+  } catch {}
+
+  let sourceUrls: string[] = [];
+  try {
+    sourceUrls = row.source_urls_json ? JSON.parse(row.source_urls_json) : [];
+  } catch {}
+
+  let tags: string[] = [];
+  try {
+    tags = row.tags_json ? JSON.parse(row.tags_json) : [];
+  } catch {}
+
+  let factCheckResult: any = undefined;
+  try {
+    factCheckResult = row.fact_check_json ? JSON.parse(row.fact_check_json) : undefined;
+  } catch {}
+
+  const title = row.title || row.judul || '';
+  const summary = row.summary || row.ringkasan || '';
+
+  return {
+    id: row.id,
+    slug: row.slug || row.id,
+    title,
+    judul: title,
+    summary,
+    ringkasan: summary,
+    content,
+    isiLengkap: content,
+    facts,
+    whyItMatters: row.why_it_matters || undefined,
+    category: row.category || 'dunia',
+    kategori: row.category || 'dunia',
+    categoryLabel: row.category_label || 'Dunia',
+    kategoriLabel: row.category_label || 'Dunia',
+    location: row.location || 'Internasional',
+    negaraLokasi: row.location || 'Internasional',
+    author: row.author || 'Redaksi DenyutGlobal',
+    publishedAt: row.published_at || undefined,
+    tanggal: row.display_date || row.tanggal || '',
+    waktu: row.display_time || row.waktu || '',
+    updatedAt: row.updated_at || undefined,
+    correctedAt: row.corrected_at || undefined,
+    correctionStatus: row.correction_status || 'none',
+    correctionNote: row.correction_note || undefined,
+    correctionNotes: row.correction_note || undefined,
+    isUpdated: Boolean(row.is_updated),
+    sources,
+    sourceUrls,
+    namaSumber: row.nama_sumber || (sources.length > 0 ? sources.map((s: any) => s.name).join(', ') : ''),
+    urlSumber: row.url_sumber || (sources.length > 0 ? sources[0].url : ''),
+    image: row.image || '',
+    gambar: row.image || '',
+    captionGambar: row.caption_gambar || '',
+    imageType: row.image_type || 'none',
+    imageCredit: row.image_credit || '',
+    status: row.status || 'draft',
+    reviewed: Boolean(row.reviewed),
+    editorialRevisionNotes: row.editorial_revision_notes || undefined,
+    approvedAt: row.approved_at || undefined,
+    approvedBy: row.approved_by || undefined,
+    factCheckResult,
+    isAiGeneratedDraft: Boolean(row.is_ai_generated_draft),
+    isHero: Boolean(row.is_hero),
+    isFeatured: Boolean(row.is_featured),
+    isBreaking: Boolean(row.is_breaking),
+    isDailyBrief: Boolean(row.is_daily_brief),
+    briefOrder: row.brief_order ?? undefined,
+    readTimeMinutes: row.read_time_minutes ?? 3,
+    tags,
+    isEditorial: row.is_editorial !== 0
+  };
+}
+
+// Helper to extract parameters array for D1 SQL INSERT/UPDATE
+function newsItemToSqlParams(item: NewsItem): any[] {
+  const norm = normalizeNewsItem(item);
+  return [
+    norm.id,
+    norm.slug || norm.id,
+    norm.title || norm.judul || '',
+    norm.summary || norm.ringkasan || '',
+    JSON.stringify(norm.content || norm.isiLengkap || []),
+    JSON.stringify(norm.facts || []),
+    norm.whyItMatters || '',
+    norm.category || norm.kategori || 'dunia',
+    norm.categoryLabel || norm.kategoriLabel || 'Dunia',
+    norm.location || norm.negaraLokasi || 'Internasional',
+    norm.author || 'Redaksi DenyutGlobal',
+    norm.publishedAt || null,
+    norm.tanggal || '',
+    norm.waktu || '',
+    norm.updatedAt || null,
+    norm.correctedAt || null,
+    norm.correctionStatus || 'none',
+    norm.correctionNote || norm.correctionNotes || null,
+    norm.isUpdated ? 1 : 0,
+    JSON.stringify(norm.sources || []),
+    JSON.stringify(norm.sourceUrls || []),
+    norm.namaSumber || '',
+    norm.urlSumber || '',
+    norm.image || norm.gambar || '',
+    norm.captionGambar || '',
+    norm.imageType || 'none',
+    norm.imageCredit || '',
+    norm.status || 'draft',
+    norm.reviewed ? 1 : 0,
+    norm.editorialRevisionNotes || null,
+    norm.approvedAt || null,
+    norm.approvedBy || null,
+    norm.factCheckResult ? JSON.stringify(norm.factCheckResult) : null,
+    norm.isAiGeneratedDraft ? 1 : 0,
+    norm.isHero ? 1 : 0,
+    norm.isFeatured ? 1 : 0,
+    norm.isBreaking ? 1 : 0,
+    norm.isDailyBrief ? 1 : 0,
+    norm.briefOrder ?? null,
+    norm.readTimeMinutes || 3,
+    JSON.stringify(norm.tags || []),
+    norm.isEditorial !== false ? 1 : 0
+  ];
+}
+
+const D1_UPSERT_SQL = `
+INSERT INTO articles (
+  id, slug, title, summary, content_json, facts_json, why_it_matters,
+  category, category_label, location, author, published_at, display_date,
+  display_time, updated_at, corrected_at, correction_status, correction_note,
+  is_updated, sources_json, source_urls_json, nama_sumber, url_sumber,
+  image, caption_gambar, image_type, image_credit, status, reviewed,
+  editorial_revision_notes, approved_at, approved_by, fact_check_json,
+  is_ai_generated_draft, is_hero, is_featured, is_breaking, is_daily_brief,
+  brief_order, read_time_minutes, tags_json, is_editorial
+) VALUES (
+  ?, ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?
+)
+ON CONFLICT(id) DO UPDATE SET
+  slug = excluded.slug,
+  title = excluded.title,
+  summary = excluded.summary,
+  content_json = excluded.content_json,
+  facts_json = excluded.facts_json,
+  why_it_matters = excluded.why_it_matters,
+  category = excluded.category,
+  category_label = excluded.category_label,
+  location = excluded.location,
+  author = excluded.author,
+  published_at = excluded.published_at,
+  display_date = excluded.display_date,
+  display_time = excluded.display_time,
+  updated_at = excluded.updated_at,
+  corrected_at = excluded.corrected_at,
+  correction_status = excluded.correction_status,
+  correction_note = excluded.correction_note,
+  is_updated = excluded.is_updated,
+  sources_json = excluded.sources_json,
+  source_urls_json = excluded.source_urls_json,
+  nama_sumber = excluded.nama_sumber,
+  url_sumber = excluded.url_sumber,
+  image = excluded.image,
+  caption_gambar = excluded.caption_gambar,
+  image_type = excluded.image_type,
+  image_credit = excluded.image_credit,
+  status = excluded.status,
+  reviewed = excluded.reviewed,
+  editorial_revision_notes = excluded.editorial_revision_notes,
+  approved_at = excluded.approved_at,
+  approved_by = excluded.approved_by,
+  fact_check_json = excluded.fact_check_json,
+  is_ai_generated_draft = excluded.is_ai_generated_draft,
+  is_hero = excluded.is_hero,
+  is_featured = excluded.is_featured,
+  is_breaking = excluded.is_breaking,
+  is_daily_brief = excluded.is_daily_brief,
+  brief_order = excluded.brief_order,
+  read_time_minutes = excluded.read_time_minutes,
+  tags_json = excluded.tags_json,
+  is_editorial = excluded.is_editorial;
+`;
+
+function getD1Database(req?: express.Request): any | null {
+  return (globalThis as any).DB || 
+         (process.env as any).DB || 
+         (req as any)?.env?.DB || 
+         (globalThis as any).__env__?.DB || 
+         null;
+}
+
+export interface D1ExecutionResult<T = any> {
+  success: boolean;
+  results: T[];
+  error?: string;
+  source: 'd1_binding' | 'd1_rest_api' | 'none';
+  rowsWritten?: number;
+}
+
+async function executeD1Query<T = any>(
+  sql: string,
+  params: any[] = [],
+  req?: express.Request
+): Promise<D1ExecutionResult<T>> {
+  // 1. Coba Native Cloudflare Worker Binding (jika berjalan di Cloudflare Workers/Pages runtime)
+  const nativeDb = getD1Database(req);
+  if (nativeDb && typeof nativeDb.prepare === 'function') {
+    try {
+      const stmt = nativeDb.prepare(sql).bind(...params);
+      const res = await stmt.all();
+      return {
+        success: true,
+        results: (res.results || []) as T[],
+        source: 'd1_binding',
+        rowsWritten: (res.meta as any)?.rows_written ?? (res.meta as any)?.changes ?? 1
+      };
+    } catch (err: any) {
+      console.error('Error executing native D1 query:', err);
+      return {
+        success: false,
+        results: [],
+        error: `Native D1 Error: ${err?.message || String(err)}`,
+        source: 'd1_binding'
+      };
+    }
+  }
+
+  // 2. Coba Cloudflare D1 v4 REST API (jika kredensial Cloudflare tersedia di environment)
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  let apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  let databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || process.env.CLOUDFLARE_DATABASE_ID;
+
+  // Auto-detect if token and database_id are swapped in env vars
+  if (databaseId && databaseId.startsWith('cfut_') && apiToken && !apiToken.startsWith('cfut_')) {
+    const temp = apiToken;
+    apiToken = databaseId;
+    databaseId = temp;
+  }
+
+  if (!databaseId || databaseId === 'REPLACE_WITH_YOUR_CLOUDFLARE_D1_DATABASE_ID') {
+    try {
+      const wranglerPath = path.join(process.cwd(), 'wrangler.jsonc');
+      if (fs.existsSync(wranglerPath)) {
+        const raw = fs.readFileSync(wranglerPath, 'utf-8');
+        const cleanJson = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const parsed = JSON.parse(cleanJson);
+        const d1 = parsed?.d1_databases?.[0];
+        if (d1?.database_id && d1.database_id !== 'REPLACE_WITH_YOUR_CLOUDFLARE_D1_DATABASE_ID') {
+          databaseId = d1.database_id;
+        }
+      }
+    } catch {}
+  }
+
+  if (accountId && apiToken && databaseId) {
+    try {
+      const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+      const apiRes = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ sql, params })
+      });
+
+      const json = await apiRes.json();
+      if (json.success && Array.isArray(json.result) && json.result[0]) {
+        const queryRes = json.result[0];
+        return {
+          success: true,
+          results: (queryRes.results || []) as T[],
+          source: 'd1_rest_api',
+          rowsWritten: queryRes.meta?.rows_written ?? queryRes.meta?.changes ?? 1
+        };
+      } else {
+        const errMsg = json.errors?.[0]?.message || JSON.stringify(json.errors) || 'Gagal mengeksekusi D1 REST API query';
+        return {
+          success: false,
+          results: [],
+          error: `Cloudflare D1 REST API Error: ${errMsg}`,
+          source: 'd1_rest_api'
+        };
+      }
+    } catch (apiErr: any) {
+      console.error('Error connecting to Cloudflare D1 REST API:', apiErr);
+      return {
+        success: false,
+        results: [],
+        error: `Cloudflare D1 Network Error: ${apiErr?.message || String(apiErr)}`,
+        source: 'd1_rest_api'
+      };
+    }
+  }
+
+  return {
+    success: false,
+    results: [],
+    error: 'Cloudflare D1 binding (env.DB) atau kredensial Cloudflare D1 REST API (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_D1_DATABASE_ID) belum terhubung.',
+    source: 'none'
+  };
+}
+
+// Editorial Session Passphrase Hash & Session Tokens Store
+const EDITORIAL_PASSPHRASE_SHA256_HASH = process.env.EDITORIAL_PASSPHRASE_SHA256_HASH || '518f21a9a8470c890258ddaa2dc85c5483f597e22d7dc4b4a825208aa0eb1ea7';
+const activeEditorialSessions = new Map<string, number>(); // token -> expiresAt
+
+function cleanExpiredSessions() {
+  const now = Date.now();
+  for (const [token, exp] of activeEditorialSessions.entries()) {
+    if (exp < now) activeEditorialSessions.delete(token);
+  }
+}
+
+function verifyEditorialToken(token: string | undefined): boolean {
+  if (!token) return false;
+  cleanExpiredSessions();
+  const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+  const exp = activeEditorialSessions.get(cleanToken);
+  if (!exp) {
+    // Also allow master secret from env if configured
+    if (process.env.EDITORIAL_SECRET_KEY && cleanToken === process.env.EDITORIAL_SECRET_KEY) {
+      return true;
+    }
+    return false;
+  }
+  return exp > Date.now();
+}
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '15mb' }));
+
+  // Middleware Otorisasi Redaksi Server-Side
+  const requireEditorialAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization || (req.headers['x-editorial-token'] as string);
+    if (!authHeader || !verifyEditorialToken(authHeader)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Akses ditolak. Sesi otorisasi Ruang Redaksi tidak valid atau telah berakhir.',
+        code: 'UNAUTHORIZED'
+      });
+    }
+    next();
+  };
 
   // Lazy Gemini Client
   let aiClient: GoogleGenAI | null = null;
@@ -117,6 +569,429 @@ async function startServer() {
       console.warn('Error reading sitemap.xml:', e);
     }
     res.status(404).send('Sitemap not found');
+  });
+
+  // =====================================================================
+  // 1. ENDPOINT AUTENTIKASI RUANG REDAKSI (SERVER-SIDE)
+  // =====================================================================
+  app.post('/api/editorial/auth', (req, res) => {
+    try {
+      const { passphraseHash, passphrase } = req.body;
+      let inputHash = '';
+
+      if (passphraseHash && typeof passphraseHash === 'string') {
+        inputHash = passphraseHash.trim().toLowerCase();
+      } else if (passphrase && typeof passphrase === 'string') {
+        inputHash = crypto.createHash('sha256').update(passphrase.trim()).digest('hex');
+      }
+
+      if (!inputHash) {
+        return res.status(400).json({
+          success: false,
+          error: 'Passphrase atau hash wajib disertakan.'
+        });
+      }
+
+      if (inputHash === EDITORIAL_PASSPHRASE_SHA256_HASH.toLowerCase()) {
+        const sessionToken = `dg_${crypto.randomBytes(24).toString('hex')}`;
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 jam
+        activeEditorialSessions.set(sessionToken, expiresAt);
+
+        return res.json({
+          success: true,
+          message: 'Autentikasi Ruang Redaksi berhasil.',
+          token: sessionToken,
+          expiresAt
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        error: 'Passphrase otorisasi Ruang Redaksi tidak cocok.'
+      });
+    } catch (err: any) {
+      console.error('Editorial auth error:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Terjadi kesalahan pada verifikasi sesi redaksi.'
+      });
+    }
+  });
+
+  // =====================================================================
+  // 1B. DIAGNOSTIK STATUS KONEKSI CLOUDFLARE D1
+  // =====================================================================
+  app.get('/api/d1/status', async (req, res) => {
+    try {
+      const result = await executeD1Query<{ total_articles: number }>(
+        `SELECT count(*) as total_articles FROM articles`,
+        [],
+        req
+      );
+
+      return res.json({
+        success: result.success,
+        d1_connected: result.success,
+        d1_source: result.source,
+        total_articles_in_d1: result.results?.[0]?.total_articles ?? 0,
+        error: result.error || null,
+        mode: result.source === 'd1_binding' ? 'Cloudflare Workers Binding (env.DB)' : result.source === 'd1_rest_api' ? 'Cloudflare D1 REST API v4' : 'Not Connected (Fallback to Server Store)'
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        d1_connected: false,
+        error: err?.message || String(err)
+      });
+    }
+  });
+
+  // =====================================================================
+  // 2. ENDPOINT PUBLIK ARTIKEL (HANYA STATUS 'PUBLISHED' & REVIEWED = TRUE)
+  // =====================================================================
+  // GET /api/articles - Mengambil daftar artikel terpublikasi dari D1 / Cache
+  app.get('/api/articles', async (req, res) => {
+    try {
+      const { category, limit, offset } = req.query;
+
+      let sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1`;
+      const params: any[] = [];
+
+      if (category && typeof category === 'string' && category !== 'semua') {
+        sql += ` AND LOWER(category) = LOWER(?)`;
+        params.push(category.trim());
+      }
+
+      sql += ` ORDER BY published_at DESC`;
+
+      if (limit) {
+        const numLimit = Math.max(1, parseInt(limit as string, 10));
+        const numOffset = offset ? Math.max(0, parseInt(offset as string, 10)) : 0;
+        sql += ` LIMIT ? OFFSET ?`;
+        params.push(numLimit, numOffset);
+      }
+
+      const d1Result = await executeD1Query(sql, params, req);
+
+      if (d1Result.success && d1Result.results.length > 0) {
+        const articles = d1Result.results.map(rowToNewsItem);
+        return res.json({
+          success: true,
+          source: d1Result.source,
+          count: articles.length,
+          data: articles
+        });
+      }
+
+      // Fallback: In-Memory / File Persisted Store
+      let published = serverArticles.filter(
+        (a) => a.status === 'published' && a.reviewed === true
+      );
+
+      if (category && typeof category === 'string' && category !== 'semua') {
+        published = published.filter(
+          (a) => (a.category || a.kategori || '').toLowerCase() === category.toLowerCase()
+        );
+      }
+
+      published.sort((a, b) => {
+        const timeA = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+        const timeB = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+        return timeB - timeA;
+      });
+
+      const numLimit = limit ? Math.max(1, parseInt(limit as string, 10)) : published.length;
+      const numOffset = offset ? Math.max(0, parseInt(offset as string, 10)) : 0;
+      const paged = published.slice(numOffset, numOffset + numLimit);
+
+      return res.json({
+        success: true,
+        source: 'server_store',
+        count: published.length,
+        data: paged
+      });
+    } catch (err: any) {
+      console.error('Error fetching public articles:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Gagal memuat artikel publik.'
+      });
+    }
+  });
+
+  // GET /api/articles/:slug - Mengambil satu artikel terpublikasi berdasarkan slug atau ID
+  app.get('/api/articles/:slug', async (req, res) => {
+    try {
+      const { slug } = req.params;
+      if (!slug) {
+        return res.status(400).json({ success: false, error: 'Slug artikel wajib disertakan.' });
+      }
+
+      const cleanSlug = decodeURIComponent(slug).trim().toLowerCase();
+      const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
+      const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
+
+      if (d1Result.success && d1Result.results.length > 0) {
+        return res.json({
+          success: true,
+          source: d1Result.source,
+          data: rowToNewsItem(d1Result.results[0])
+        });
+      }
+
+      // Filter ketat: HANYA published dan reviewed dari server cache
+      const published = serverArticles.filter(
+        (a) => a.status === 'published' && a.reviewed === true
+      );
+
+      const found = published.find(
+        (a) =>
+          (a.slug && a.slug.toLowerCase() === cleanSlug) ||
+          (a.id && a.id.toLowerCase() === cleanSlug) ||
+          ((a.title || a.judul) && (a.title || a.judul).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') === cleanSlug)
+      );
+
+      if (found) {
+        return res.json({
+          success: true,
+          source: 'server_store',
+          data: found
+        });
+      }
+
+      return res.status(404).json({
+        success: false,
+        error: 'Artikel tidak ditemukan atau belum dipublikasikan.'
+      });
+    } catch (err: any) {
+      console.error('Error fetching public article by slug:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Gagal memuat artikel.'
+      });
+    }
+  });
+
+  // =====================================================================
+  // 3. ENDPOINT EDITORIAL ARTIKEL (MEMERLUKAN OTORISASI SERVER-SIDE)
+  // =====================================================================
+  // GET /api/editorial/articles - Mengambil semua naskah (termasuk draft/review/approved/published)
+  app.get('/api/editorial/articles', requireEditorialAuth, async (req, res) => {
+    try {
+      const sql = `SELECT * FROM articles ORDER BY created_at DESC`;
+      const d1Result = await executeD1Query(sql, [], req);
+
+      if (d1Result.success && d1Result.results.length > 0) {
+        const articles = d1Result.results.map(rowToNewsItem);
+        return res.json({
+          success: true,
+          source: d1Result.source,
+          count: articles.length,
+          data: articles
+        });
+      }
+
+      return res.json({
+        success: true,
+        source: 'server_store',
+        count: serverArticles.length,
+        data: serverArticles
+      });
+    } catch (err: any) {
+      console.error('Error in editorial get articles:', err);
+      return res.status(500).json({ success: false, error: 'Gagal mengambil data redaksi.' });
+    }
+  });
+
+  // POST /api/editorial/articles - Membuat naskah baru atau upsert ke D1
+  app.post('/api/editorial/articles', requireEditorialAuth, async (req, res) => {
+    try {
+      const articlePayload = req.body;
+      if (!articlePayload || (!articlePayload.title && !articlePayload.judul)) {
+        return res.status(400).json({ success: false, error: 'Judul artikel wajib diisi.' });
+      }
+
+      const normalized = normalizeNewsItem(articlePayload);
+      const params = newsItemToSqlParams(normalized);
+
+      // Eksekusi INSERT ke Cloudflare D1
+      const d1Result = await executeD1Query(D1_UPSERT_SQL, params, req);
+
+      // Update in-memory / local storage server cache
+      const existingIdx = serverArticles.findIndex((a) => a.id === normalized.id);
+      if (existingIdx >= 0) {
+        serverArticles[existingIdx] = normalized;
+      } else {
+        serverArticles.unshift(normalized);
+      }
+      saveServerArticles(serverArticles);
+
+      // Cek apakah D1 terhubung dan berhasil
+      if (d1Result.success) {
+        return res.json({
+          success: true,
+          d1_persisted: true,
+          d1_source: d1Result.source,
+          message: 'Artikel berhasil disimpan dan di-INSERT ke database Cloudflare D1.',
+          data: normalized
+        });
+      }
+
+      // Jika D1 dicoba tapi query error (misal skema tidak cocok)
+      if (d1Result.source !== 'none') {
+        console.error('D1 execution failed:', d1Result.error);
+        return res.status(502).json({
+          success: false,
+          d1_persisted: false,
+          d1_source: d1Result.source,
+          error: d1Result.error,
+          message: 'Gagal mengeksekusi INSERT ke Cloudflare D1. ' + d1Result.error,
+          data: normalized
+        });
+      }
+
+      // Jika D1 belum terhubung di runtime ini, beritahu status sebenarnya
+      return res.json({
+        success: true,
+        d1_persisted: false,
+        d1_source: 'server_store',
+        warning: 'Data tersimpan di server cache lokal. Kredensial Cloudflare D1 belum terkonfigurasi di environment ini.',
+        message: 'Artikel tersimpan di cache server lokal.',
+        data: normalized
+      });
+    } catch (err: any) {
+      console.error('Error saving editorial article:', err);
+      return res.status(500).json({ success: false, error: 'Gagal menyimpan artikel redaksi.' });
+    }
+  });
+
+  // PUT /api/editorial/articles/:id - Memperbarui naskah di D1
+  app.put('/api/editorial/articles/:id', requireEditorialAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updateData = req.body;
+
+      const existingIdx = serverArticles.findIndex((a) => a.id === id);
+      const currentBase = existingIdx >= 0 ? serverArticles[existingIdx] : updateData;
+
+      const updated = normalizeNewsItem({
+        ...currentBase,
+        ...updateData,
+        id,
+        updatedAt: new Date().toISOString()
+      });
+
+      const params = newsItemToSqlParams(updated);
+      const d1Result = await executeD1Query(D1_UPSERT_SQL, params, req);
+
+      if (existingIdx >= 0) {
+        serverArticles[existingIdx] = updated;
+      } else {
+        serverArticles.unshift(updated);
+      }
+      saveServerArticles(serverArticles);
+
+      if (d1Result.success) {
+        return res.json({
+          success: true,
+          d1_persisted: true,
+          d1_source: d1Result.source,
+          message: 'Artikel berhasil diperbarui di database Cloudflare D1.',
+          data: updated
+        });
+      }
+
+      if (d1Result.source !== 'none') {
+        return res.status(502).json({
+          success: false,
+          d1_persisted: false,
+          error: d1Result.error,
+          message: 'Gagal memperbarui di Cloudflare D1: ' + d1Result.error,
+          data: updated
+        });
+      }
+
+      return res.json({
+        success: true,
+        d1_persisted: false,
+        d1_source: 'server_store',
+        warning: 'Data diperbarui di server cache lokal.',
+        data: updated
+      });
+    } catch (err: any) {
+      console.error('Error updating editorial article:', err);
+      return res.status(500).json({ success: false, error: 'Gagal memperbarui artikel.' });
+    }
+  });
+
+  // DELETE /api/editorial/articles/:id - Menghapus naskah dari D1
+  app.delete('/api/editorial/articles/:id', requireEditorialAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const d1Result = await executeD1Query(`DELETE FROM articles WHERE id = ?`, [id], req);
+
+      const initialLength = serverArticles.length;
+      serverArticles = serverArticles.filter((a) => a.id !== id);
+      saveServerArticles(serverArticles);
+
+      return res.json({
+        success: true,
+        d1_deleted: d1Result.success,
+        d1_source: d1Result.source,
+        message: d1Result.success ? 'Artikel berhasil dihapus dari Cloudflare D1.' : 'Artikel dihapus dari database server.',
+        deletedId: id
+      });
+    } catch (err: any) {
+      console.error('Error deleting editorial article:', err);
+      return res.status(500).json({ success: false, error: 'Gagal menghapus artikel.' });
+    }
+  });
+
+  // POST /api/editorial/sync-batch - Sinkronisasi batch dari localStorage ke D1 (idempotent upsert)
+  app.post('/api/editorial/sync-batch', requireEditorialAuth, async (req, res) => {
+    try {
+      const { articles } = req.body;
+      if (!Array.isArray(articles)) {
+        return res.status(400).json({ success: false, error: 'Format payload articles harus berupa array.' });
+      }
+
+      let insertedCount = 0;
+      let updatedCount = 0;
+      let d1SuccessCount = 0;
+
+      for (const item of articles) {
+        if (!item || (!item.title && !item.judul)) continue;
+        const normalized = normalizeNewsItem(item);
+        const params = newsItemToSqlParams(normalized);
+
+        const d1Res = await executeD1Query(D1_UPSERT_SQL, params, req);
+        if (d1Res.success) {
+          d1SuccessCount++;
+        }
+
+        const idx = serverArticles.findIndex((a) => a.id === normalized.id || (a.slug && a.slug === normalized.slug));
+        if (idx >= 0) {
+          serverArticles[idx] = { ...serverArticles[idx], ...normalized };
+          updatedCount++;
+        } else {
+          serverArticles.push(normalized);
+          insertedCount++;
+        }
+      }
+
+      saveServerArticles(serverArticles);
+
+      return res.json({
+        success: true,
+        d1_synced_count: d1SuccessCount,
+        message: `Sinkronisasi berhasil: ${insertedCount} baru, ${updatedCount} diperbarui. (D1 Synced: ${d1SuccessCount})`,
+        total: serverArticles.length,
+        data: serverArticles
+      });
+    } catch (err: any) {
+      console.error('Error in editorial sync batch:', err);
+      return res.status(500).json({ success: false, error: 'Gagal melakukan sinkronisasi batch.' });
+    }
   });
 
   // AI Editorial Draft Assistant Endpoint (STRICT ATURAN JURNALISTIK & INTEGRITAS FAKTA)
@@ -494,8 +1369,23 @@ Kembalikan HANYA format JSON valid:
     const forbiddenWords = ['terbukti', 'pasti', 'terbesar', 'bersejarah', 'spektakuler', 'menghebohkan', 'memperkuat', 'menjadi bukti'];
 
     // Tahap 2: Lakukan fetching isi teks aktual dari sumber-sumber yang memiliki URL valid
-    const fetchedSourceData: Array<{ name: string; url: string; success: boolean; text?: string; error?: string }> = [];
+    const fetchedSourceData: Array<{ 
+      name: string; 
+      url: string; 
+      success: boolean; 
+      text?: string; 
+      error?: string;
+      httpStatus?: number;
+    }> = [];
     const sourceFetchFailures: string[] = [];
+    const sourceStatuses: Array<{
+      name: string;
+      url: string;
+      status: 'terverifikasi_mendukung' | 'sumber_tidak_dapat_diakses' | 'tidak_mendukung' | 'belum_diverifikasi';
+      statusLabel: string;
+      technicalError?: string;
+      httpStatus?: number;
+    }> = [];
 
     for (const src of validSources) {
       if (src.url && isUrlVerifiable(src.url)) {
@@ -506,7 +1396,15 @@ Kembalikan HANYA format JSON valid:
               name: src.name || fetchRes.hostname || 'Sumber',
               url: src.url,
               success: true,
-              text: fetchRes.text
+              text: fetchRes.text,
+              httpStatus: 200
+            });
+            sourceStatuses.push({
+              name: src.name || fetchRes.hostname || 'Sumber',
+              url: src.url,
+              status: 'belum_diverifikasi',
+              statusLabel: 'Berhasil diakses — siap diaudit',
+              httpStatus: 200
             });
           } else {
             const reason = fetchRes.error || 'Gagal mengekstrak isi teks sumber';
@@ -517,6 +1415,13 @@ Kembalikan HANYA format JSON valid:
               error: reason
             });
             sourceFetchFailures.push(`${src.name || src.url}: ${reason}`);
+            sourceStatuses.push({
+              name: src.name || 'Sumber',
+              url: src.url,
+              status: 'sumber_tidak_dapat_diakses',
+              statusLabel: 'SUMBER TIDAK DAPAT DIAKSES',
+              technicalError: reason
+            });
           }
         } catch (fetchErr: any) {
           const reason = fetchErr?.message || 'Gagal koneksi ke URL sumber';
@@ -527,12 +1432,28 @@ Kembalikan HANYA format JSON valid:
             error: reason
           });
           sourceFetchFailures.push(`${src.name || src.url}: ${reason}`);
+          sourceStatuses.push({
+            name: src.name || 'Sumber',
+            url: src.url,
+            status: 'sumber_tidak_dapat_diakses',
+            statusLabel: 'SUMBER TIDAK DAPAT DIAKSES',
+            technicalError: reason
+          });
         }
+      } else if (src.name) {
+        sourceStatuses.push({
+          name: src.name,
+          url: src.url || '',
+          status: 'belum_diverifikasi',
+          statusLabel: src.url ? 'URL tidak valid' : 'URL belum dicantumkan',
+          technicalError: src.url ? 'Format URL tidak valid' : 'URL belum ada'
+        });
       }
     }
 
     const successfulFetchedSources = fetchedSourceData.filter(s => s.success && s.text);
     const hasFetchedSourceContent = successfulFetchedSources.length > 0;
+    const hasInaccessibleSources = sourceFetchFailures.length > 0;
 
     const client = getGeminiClient();
 
@@ -550,58 +1471,58 @@ STANDAR & ATURAN AUDIT KETAT DENYUTGLOBAL:
    - Setiap claim harus mempertahankan teks dan maksud dari Fakta Utama asal yang bersangkutan.
    - Jika ada klaim tambahan dari isi naskah (lead/tubuh artikel/angka krusial), Anda boleh menambahkannya setelah butir-butir Fakta Utama tersebut.
 
-2. VERIFIKASI BERBASIS ISI TEKS SUMBER (GROUND TRUTH):
-   - Sumber hanya boleh dianggap MEMBUKTIKAN ("status": "verified", "supported": true) JIKA DAN HANYA JIKA ISI TEKS SUMBER yang disediakan di bawah benar-benar memuat data/fakta yang mendukung klaim tersebut secara langsung atau dengan makna yang setara dan eksplisit.
-   - DILARANG menganggap klaim verified hanya karena nama lembaga resmi, domain/URL terlihat kredibel, atau pengetahuan umum model.
-   - Jika isi sumber TIDAK berhasil diambil (${!hasFetchedSourceContent ? 'TIDAK ADA ISI SUMBER YANG BERHASIL DIAMBIL' : `${successfulFetchedSources.length} sumber berhasil diambil`}), maka SEMUA klaim yang bersangkutan WAJIB diberi "status": "needs_verification" (atau "missing_source") dengan "supported": false.
-   - Jika sumber hanya membahas topik serupa tetapi tidak memuat angka, nama, atau rincian spesifik klaim, JANGAN beri status verified. Beri "needs_verification".
+2. LOGIKA VERIFIKASI SUMBER & DISTINGSI KATEGORI (SANGAT PENTING):
+   Anda WAJIB membedakan 4 kondisi berikut secara tegas dan objektif:
+   a) SUMBER BERHASIL DIAMBIL & ISINYA MENDUKUNG ("status": "verified", "supported": true):
+      - ISI TEKS SUMBER yang disediakan di bawah benar-benar memuat data/fakta/angka yang mendukung klaim secara langsung atau makna setara yang eksplisit.
+   b) SUMBER TIDAK DAPAT DIAKSES KARENA KENDALA TEKNIS ("status": "pending_source_verification", "supported": false):
+      - Jika URL sumber mengalami HTTP 404, timeout, error koneksi, atau gagal diekstrak:
+        * DILARANG menyatakan fakta salah atau bohong.
+        * DILARANG memasukkan ke "unsupportedClaims" atau "conflictWarnings" hanya karena kegagalan teknis pengambilan web.
+        * Tetapkan "status": "pending_source_verification", "supported": false, "issue": "Sumber tidak dapat diakses secara teknis (HTTP 404/koneksi). Menunggu verifikasi sumber secara manual oleh editor (Bukan bukti fakta salah)".
+   c) SUMBER BERHASIL DIAMBIL TETAPI ISINYA BELUM MEMUAT RINCIAN SPESIFIK ("status": "needs_verification", "supported": false):
+      - Sumber membahas topik serupa tetapi belum memuat angka nominal, persentase, atau rincian spesifik klaim. Tetapkan "status": "needs_verification".
+   d) SUMBER TERBUKTI TIDAK SESUAI / KONTRADIKSI ("status": "needs_verification", "supported": false):
+      - Isi sumber BERHASIL diambil dan secara nyata BERTENTANGAN dengan klaim dalam naskah (misal: naskah menyebut 100 korban, sumber resmi menyebut 10 korban).
+      - Tandai secara eksplisit di "conflictWarnings" dan "unsupportedClaims".
 
 3. VERIFIKASI DATA ANGKA & ENTITAS SPESIFIK:
    - Angka, tanggal, persentase, besaran moneter, kapasitas, nominal (contoh: "USD 149,9 miliar", "6,8 bulan impor", "3 bulan standar"), nama lembaga, nama proyek, dan nama tokoh harus diverifikasi ketepatannya secara individual terhadap isi teks sumber.
-   - Angka pembulatan yang berbeda (misal "149 miliar" vs "149,9 miliar" atau "6 bulan" vs "6,8 bulan") TIDAK BOLEH dianggap terverifikasi otomatis jika tidak cocok dengan isi sumber.
 
 4. KESELARASAN JUDUL DENGAN FAKTA (EDITORIAL INTEGRITY):
    - Periksa apakah Judul sesuai dengan fakta utama dalam isi naskah dan sumber rujukan.
-   - Jika judul tidak sesuai, hiperbolis, clickbait, membesar-besarkan fakta, atau memuat klaim yang bertentangan dengan isi naskah, tandai sebagai masalah editorial ("unsupportedClaims").
+   - Jika judul tidak sesuai, hiperbolis, clickbait, membesar-besarkan fakta, tandai di "unsupportedClaims".
 
-5. DETEKSI KONFLIK FAKTA:
-   - Jika sumber resmi yang tersedia bertentangan dengan klaim dalam naskah, tandai secara eksplisit sebagai "KONFLIK FAKTA" di dalam daftar conflictWarnings.
-
-6. DILARANG MENGARANG:
-   - Dilarang keras mengarang fakta, angka, kutipan, URL, nama, tanggal, atau nomor halaman palsu.
-   - Jika verified, buat "sourceTrace" yang informatif: contoh "Bank Indonesia (https://...) — Terverifikasi terhadap rilis resmi BI mengenai cadangan devisa USD 149,9 miliar".
-
-7. PANTANGAN TEMPLATE & KATA TERLARANG:
+5. PANTANGAN TEMPLATE & KATA TERLARANG:
    - Periksa apakah ada penggunaan kata terlarang tanpa dasar data eksplisit: ["terbukti", "pasti", "terbesar", "bersejarah", "spektakuler", "menghebohkan", "memperkuat", "menjadi bukti"].
-   - Periksa apakah ada kalimat template internal redaksi (seperti "sedang dalam penelaahan redaksi", "feed kawat resmi", "transformasi naskah", "denyutglobal menerapkan prinsip transparansi", "editor mencatat", dll).
-   - Periksa apakah ada tanda placeholder atau elipsis ("...", "[...]", "[isi]", "[nama]", "[tanggal]", "[lokasi]").
+   - Periksa apakah ada kalimat template internal redaksi atau placeholder ("...", "[...]", "[isi]").
 
-8. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
-   - Status "LOLOS VERIFIKASI BERSIH" ("passed": true, "canPublish": true, "hasUnverifiedClaims": false) HANYA BOLEH DIBERIKAN jika:
-     a) Isi sumber berhasil diambil dan membuktikan SEMUA butir Fakta Utama;
+6. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
+   - Status "passed": true HANYA jika:
+     a) Sumber berhasil diambil dan membuktikan SEMUA butir Fakta Utama;
      b) SEMUA klaim memiliki "supported": true dan "status": "verified";
-     c) Tidak ada konflik fakta, tidak ada unsupportedClaims, dan tidak ada missingSourceClaims;
+     c) Tidak ada konflik fakta, tidak ada unsupportedClaims;
      d) Tidak ada kata terlarang, kalimat template, atau placeholder.
-   - Jika SATU SAJA butir Fakta Utama belum terbukti oleh isi sumber, maka status keseluruhan WAJIB "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
+   - Jika ada sumber yang tidak dapat diakses atau butir fakta belum terbukti, "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
 
 ==================================================
-ISI TEKS SUMBER YANG BERHASIL DIAMBIL UNTUK VERIFIKASI (GROUND TRUTH AUDIT):
+ISI TEKS SUMBER YANG BERHASIL DIAMBIL UNTUK VERIFIKASI:
 ==================================================
 ${successfulFetchedSources.length > 0 ? successfulFetchedSources.map((s, idx) => `--- SUMBER [${idx + 1}]: ${s.name} ---
 URL: ${s.url}
 ISI TEKS SUMBER:
 ${s.text}
-`).join('\n\n') : '(TIDAK ADA ISI TEKS SUMBER YANG BERHASIL DIAMBIL / SEMUA GAGAL FETCH — TIDAK BISA MEMBERIKAN STATUS VERIFIED)'}
+`).join('\n\n') : '(TIDAK ADA ISI TEKS SUMBER YANG BERHASIL DIAMBIL SECARA OTOMATIS)'}
 
-${sourceFetchFailures.length > 0 ? `CATATAN KEGAGALAN FETCH SUMBER:\n${sourceFetchFailures.map(f => `- ${f}`).join('\n')}\n` : ''}
+${sourceFetchFailures.length > 0 ? `CATATAN SUMBER TIDAK DAPAT DIAKSES (KENDALA TEKNIS):\n${sourceFetchFailures.map(f => `- ${f}`).join('\n')}\n` : ''}
 
 BAHAN ACUAN EDITOR:
-- Daftar Fakta Utama Terverifikasi (${factsList.length} butir):
+- Daftar Fakta Utama (${factsList.length} butir):
 ${factsList.length > 0 ? factsList.map((f, i) => `[Fakta Utama ${i + 1}] ${f}`).join('\n') : '(Belum ada poin fakta spesifik)'}
 - Catatan Tambahan Editor:
 ${rawNotes || '(Kosong)'}
 - Daftar Sumber Terdaftar:
-${validSources.length > 0 ? validSources.map((s: any) => `- ${s.name || 'Sumber'} | URL: ${s.url || '(URL belum ada/tidak valid)'} | Catatan: ${s.notes || '-'}`).join('\n') : '(Tidak ada sumber)'}
+${validSources.length > 0 ? validSources.map((s: any) => `- ${s.name || 'Sumber'} | URL: ${s.url || '(URL belum ada)'} | Catatan: ${s.notes || '-'}`).join('\n') : '(Tidak ada sumber)'}
 
 NASKAH YANG DI-AUDIT:
 - Judul: ${finalTitle || '(Kosong)'}
@@ -612,34 +1533,33 @@ NASKAH YANG DI-AUDIT:
 - Isi Lengkap:
 ${contentText || '(Kosong)'}
 
-KEMBALIKAN DALAM FORMAT JSON BERIKUT (Valid JSON saja, tanpa markdown pembungkus lain).
-Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masing dari ${factsList.length} butir Fakta Utama di atas secara terpisah` : 'setiap klaim fakta utama'}:
+KEMBALIKAN DALAM FORMAT JSON BERIKUT:
 {
   "passed": boolean,
   "canPublish": boolean,
   "hasUnverifiedClaims": boolean,
-  "summary": "string (Evaluasi ringkas mengenai integritas naskah dan status audit)",
-  "unsupportedClaims": ["string (Daftar klaim spesifik/angka/judul yang tidak didukung data rujukan)"],
-  "missingSourceClaims": ["string (Daftar klaim yang kekurangan sumber rujukan valid atau URL tidak dapat diverifikasi)"],
-  "forbiddenKeywordsFound": ["string (Kata terlarang seperti 'terbukti', 'pasti', dsb yang muncul tanpa rujukan data)"],
-  "conflictWarnings": ["string (Klaim yang berkonflik dengan sumber resmi jika ditemukan)"],
+  "summary": "string (Evaluasi ringkas integritas naskah)",
+  "unsupportedClaims": ["string (Klaim yang terbukti tidak didukung atau berlawanan data)"],
+  "missingSourceClaims": ["string (Klaim yang kekurangan sumber rujukan valid)"],
+  "forbiddenKeywordsFound": ["string (Kata terlarang tanpa rujukan)"],
+  "conflictWarnings": ["string (Klaim yang bertentangan dengan isi sumber jika ditemukan)"],
   "claims": [
     ${factsList.map((f, i) => `{
       "id": "claim-${i + 1}",
       "claim": "${f.replace(/"/g, '\\"')}",
       "type": "fakta",
       "supported": false,
-      "sourceTrace": "string (Nama sumber — URL — cuplikan/keterangan bukti dari isi sumber)",
+      "sourceTrace": "string",
       "issue": "string jika ada masalah atau kosong",
-      "status": "verified" | "needs_verification" | "missing_source"
+      "status": "verified" | "pending_source_verification" | "needs_verification" | "missing_source"
     }`).join(',\n    ') || `{
       "id": "claim-1",
-      "claim": "string (Pernyataan klaim spesifik dalam naskah)",
+      "claim": "string",
       "type": "fakta" | "konteks" | "opini_analisis",
       "supported": false,
-      "sourceTrace": "string (Nama sumber terdaftar)",
-      "issue": "string jika ada masalah atau kosong",
-      "status": "verified" | "needs_verification" | "missing_source"
+      "sourceTrace": "string",
+      "issue": "string",
+      "status": "verified" | "pending_source_verification" | "needs_verification" | "missing_source"
     }`}
   ],
   "sourceAudit": {
@@ -664,7 +1584,6 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
             // Backend validation: Ensure every Fakta Utama has its own verified claim item
             if (factsList.length > 0) {
               const matchedClaims: any[] = [];
-              const unmatchedFacts: string[] = [];
 
               factsList.forEach((factText, idx) => {
                 const cleanFact = factText.toLowerCase();
@@ -675,7 +1594,6 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
                 });
 
                 if (existing) {
-                  // ONLY mark as supported and verified if AI explicitly audited it as supported+verified AND source content was actually fetched
                   const isTrulyVerified = Boolean(
                     existing.supported === true && 
                     existing.status === 'verified' && 
@@ -683,34 +1601,60 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
                     hasFetchedSourceContent
                   );
 
+                  let finalStatus: 'verified' | 'pending_source_verification' | 'needs_verification' | 'missing_source' = 'needs_verification';
+                  let finalIssue = existing.issue;
+                  let finalSourceStatus: 'terverifikasi_mendukung' | 'sumber_tidak_dapat_diakses' | 'tidak_mendukung' | 'belum_diverifikasi' = 'belum_diverifikasi';
+
+                  if (isTrulyVerified) {
+                    finalStatus = 'verified';
+                    finalIssue = undefined;
+                    finalSourceStatus = 'terverifikasi_mendukung';
+                  } else if (!hasVerifiableSourceUrl || !validSources.length) {
+                    finalStatus = 'missing_source';
+                    finalIssue = 'URL sumber rujukan belum dicantumkan atau format tidak valid';
+                    finalSourceStatus = 'belum_diverifikasi';
+                  } else if (!hasFetchedSourceContent) {
+                    finalStatus = 'pending_source_verification';
+                    finalIssue = `SUMBER TIDAK DAPAT DIAKSES: ${sourceFetchFailures[0] || 'Kendala koneksi/HTTP 404'}. Menunggu verifikasi sumber secara manual oleh editor (Bukan bukti fakta salah).`;
+                    finalSourceStatus = 'sumber_tidak_dapat_diakses';
+                  } else {
+                    finalStatus = existing.status === 'pending_source_verification' ? 'pending_source_verification' : 'needs_verification';
+                    finalIssue = existing.issue || 'Memerlukan verifikasi rujukan data pendukung';
+                    finalSourceStatus = existing.status === 'pending_source_verification' ? 'sumber_tidak_dapat_diakses' : 'tidak_mendukung';
+                  }
+
                   matchedClaims.push({
                     id: existing.id || `claim-${idx + 1}`,
                     claim: existing.claim || factText,
                     type: existing.type || 'fakta',
                     supported: isTrulyVerified,
-                    sourceTrace: existing.sourceTrace || (hasVerifiableSourceUrl ? `${validSources[0].name} (${validSources[0].url})` : (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.')),
-                    issue: !isTrulyVerified 
-                      ? (existing.issue || (!hasVerifiableSourceUrl ? 'URL sumber rujukan belum valid atau belum diverifikasi' : (!hasFetchedSourceContent ? 'Isi sumber belum berhasil diambil untuk verifikasi otomatis' : 'Memerlukan verifikasi rujukan data pendukung')))
-                      : undefined,
-                    status: isTrulyVerified 
-                      ? 'verified' 
-                      : (existing.status === 'missing_source' || !validSources.length ? 'missing_source' : 'needs_verification')
+                    sourceTrace: existing.sourceTrace || (hasVerifiableSourceUrl ? `${validSources[0].name} (${validSources[0].url})` : (validSources[0]?.name || 'Sumber belum tersedia')),
+                    issue: finalIssue,
+                    status: finalStatus,
+                    sourceStatus: finalSourceStatus,
+                    technicalReason: !hasFetchedSourceContent && sourceFetchFailures.length > 0 ? sourceFetchFailures[0] : undefined
                   });
                 } else {
-                  unmatchedFacts.push(factText);
+                  const finalStatus = !validSources.length 
+                    ? 'missing_source' 
+                    : (!hasFetchedSourceContent ? 'pending_source_verification' : 'needs_verification');
+                  
                   matchedClaims.push({
                     id: `claim-${idx + 1}`,
                     claim: factText,
                     type: 'fakta',
                     supported: false,
-                    sourceTrace: validSources.length > 0 ? (validSources[0].name || 'Sumber Terdaftar') : 'Sumber belum tersedia — perlu verifikasi editor.',
-                    issue: 'Fakta utama ini belum tervalidasi secara individual oleh audit model AI',
-                    status: validSources.length > 0 ? 'needs_verification' : 'missing_source'
+                    sourceTrace: validSources.length > 0 ? (validSources[0].name || 'Sumber Terdaftar') : 'Sumber belum tersedia',
+                    issue: !hasFetchedSourceContent && validSources.length > 0
+                      ? `SUMBER TIDAK DAPAT DIAKSES: ${sourceFetchFailures[0] || 'HTTP 404/Timeout'}. Menunggu verifikasi sumber (Bukan bukti fakta salah).`
+                      : 'Fakta utama ini memerlukan penelaahan rujukan data oleh editor',
+                    status: finalStatus,
+                    sourceStatus: !hasFetchedSourceContent && validSources.length > 0 ? 'sumber_tidak_dapat_diakses' : 'belum_diverifikasi'
                   });
                 }
               });
 
-              // Also include any extra claims generated for the body/lead paragraphs
+              // Extra claims from body
               rawClaims.forEach((c: any, extraIdx: number) => {
                 const isAlreadyMatched = matchedClaims.some((mc: any) => mc.id === c.id || mc.claim === c.claim);
                 if (!isAlreadyMatched && c && c.claim) {
@@ -721,16 +1665,19 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
                     hasFetchedSourceContent
                   );
 
+                  const finalStatus = isTrulyVerified 
+                    ? 'verified' 
+                    : (!validSources.length ? 'missing_source' : (!hasFetchedSourceContent ? 'pending_source_verification' : 'needs_verification'));
+
                   matchedClaims.push({
                     id: c.id || `claim-extra-${extraIdx + 1}`,
                     claim: c.claim,
                     type: c.type || 'fakta',
                     supported: isTrulyVerified,
-                    sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
-                    issue: !isTrulyVerified ? (c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : (!hasFetchedSourceContent ? 'Isi sumber belum berhasil diambil untuk audit' : 'Memerlukan rujukan data pendukung'))) : undefined,
-                    status: isTrulyVerified 
-                      ? 'verified' 
-                      : (c.status === 'missing_source' || !validSources.length ? 'missing_source' : 'needs_verification')
+                    sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia'),
+                    issue: !isTrulyVerified ? (c.issue || (!hasFetchedSourceContent ? 'SUMBER TIDAK DAPAT DIAKSES (Menunggu verifikasi sumber)' : 'Memerlukan rujukan data pendukung')) : undefined,
+                    status: finalStatus,
+                    sourceStatus: isTrulyVerified ? 'terverifikasi_mendukung' : (!hasFetchedSourceContent && validSources.length > 0 ? 'sumber_tidak_dapat_diakses' : 'belum_diverifikasi')
                   });
                 }
               });
@@ -746,15 +1693,37 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
                 hasFetchedSourceContent
               );
 
+              const finalStatus: 'verified' | 'pending_source_verification' | 'needs_verification' | 'missing_source' = isTrulyVerified 
+                ? 'verified' 
+                : (c.status === 'pending_source_verification' || (!hasFetchedSourceContent && validSources.length > 0)
+                    ? 'pending_source_verification'
+                    : (!validSources.length ? 'missing_source' : 'needs_verification'));
+
               return {
                 id: c.id || `claim-${idx + 1}`,
                 claim: c.claim || '',
                 type: c.type || 'fakta',
                 supported: isTrulyVerified,
-                sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia — perlu verifikasi editor.'),
-                issue: !isTrulyVerified ? (c.issue || (!hasVerifiableSourceUrl ? 'URL sumber belum diverifikasi' : (!hasFetchedSourceContent ? 'Isi sumber belum berhasil diambil' : 'Memerlukan rujukan data pendukung'))) : undefined,
-                status: isTrulyVerified ? 'verified' : (c.status === 'missing_source' || !validSources.length ? 'missing_source' : 'needs_verification')
+                sourceTrace: c.sourceTrace || (validSources[0]?.name || 'Sumber belum tersedia'),
+                issue: !isTrulyVerified ? (c.issue || (!hasFetchedSourceContent && validSources.length > 0 ? 'SUMBER TIDAK DAPAT DIAKSES — Menunggu verifikasi sumber' : 'Memerlukan rujukan data pendukung')) : undefined,
+                status: finalStatus,
+                sourceStatus: isTrulyVerified ? 'terverifikasi_mendukung' : (!hasFetchedSourceContent && validSources.length > 0 ? 'sumber_tidak_dapat_diakses' : 'belum_diverifikasi'),
+                technicalReason: c.technicalReason || (!hasFetchedSourceContent && sourceFetchFailures.length > 0 ? sourceFetchFailures[0] : undefined)
               };
+            });
+
+            // Update sourceStatuses with verification outcome
+            sourceStatuses.forEach(ss => {
+              if (ss.status !== 'sumber_tidak_dapat_diakses') {
+                const isUsedInVerified = claims.some(c => c.status === 'verified' && c.supported);
+                if (isUsedInVerified) {
+                  ss.status = 'terverifikasi_mendukung';
+                  ss.statusLabel = 'BERHASIL DIAMBIL & MENDUKUNG FAKTA';
+                } else if (hasFetchedSourceContent) {
+                  ss.status = 'tidak_mendukung';
+                  ss.statusLabel = 'BERHASIL DIAMBIL TETAPI BELUM MEMUAT DETAIL KLAIM';
+                }
+              }
             });
 
             // Strict Validation Checks (Perbaikan 4 & 6 & Tahap 2)
@@ -765,7 +1734,6 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
             const isClaimsCountSufficient = factsList.length === 0 || claims.length >= factsList.length;
             const hasForbiddenKeywords = Array.isArray(parsed.forbiddenKeywordsFound) && parsed.forbiddenKeywordsFound.length > 0;
 
-            // Check if every fact in factsList has a verified corresponding claim
             const allFactsVerified = factsList.length === 0 || factsList.every((factText, fIdx) => {
               const cleanFact = factText.toLowerCase();
               const found = claims.find((c: any) => {
@@ -789,25 +1757,27 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
 
             const missingSourceClaims = Array.isArray(parsed.missingSourceClaims) ? [...parsed.missingSourceClaims] : [];
             if (hasMissingSources && missingSourceClaims.length === 0) {
-              missingSourceClaims.push('URL sumber rujukan belum terdaftar atau tidak dapat diverifikasi.');
+              missingSourceClaims.push('URL sumber rujukan belum terdaftar atau format tidak valid.');
             } else if (!hasFetchedSourceContent && validSources.length > 0) {
-              missingSourceClaims.push('Sumber rujukan terdaftar tetapi isi halaman web tidak dapat diambil untuk verifikasi otomatis.');
-            }
-            if (!isClaimsCountSufficient || !allFactsVerified) {
-              missingSourceClaims.push(`Sebagian fakta utama belum ter-audit lengkap atau belum terkonfirmasi oleh isi sumber rujukan.`);
+              missingSourceClaims.push(`SUMBER TIDAK DAPAT DIAKSES: ${sourceFetchFailures[0] || 'Kendala koneksi/HTTP 404'}. Menunggu verifikasi sumber.`);
             }
 
-            const verifiedCount = claims.filter((c: any) => c.status === 'verified' && c.supported).length;
+            let summaryText = '';
+            if (strictPassed) {
+              summaryText = `✅ Lolos Verifikasi Bersih: Seluruh ${claims.length} butir klaim faktual dan data rujukan telah terbukti secara individual terhadap isi sumber resmi.`;
+            } else if (!hasFetchedSourceContent && validSources.length > 0) {
+              summaryText = `⚠️ Menunggu Verifikasi Sumber: URL sumber rujukan mengalami kendala akses teknis (${sourceFetchFailures.join('; ') || 'HTTP 404/Timeout'}). Fakta naskah TIDAK dianggap salah — silakan verifikasi secara manual atau perbarui URL sumber.`;
+            } else if (hasUnsupported || hasConflicts) {
+              summaryText = `⚠️ Perlu Verifikasi Editor: Terdapat klaim yang tidak sesuai atau bertentangan dengan rujukan data resmi.`;
+            } else {
+              summaryText = parsed.summary || `⚠️ Perlu Verifikasi Editor: Terdapat ${claims.filter((c: any) => c.status !== 'verified').length} dari ${claims.length} butir klaim yang memerlukan konfirmasi rujukan data valid.`;
+            }
 
             const finalResult = {
               passed: strictPassed,
               canPublish: strictPassed,
               hasUnverifiedClaims: !strictPassed,
-              summary: strictPassed
-                ? `✅ Lolos Verifikasi Bersih: Seluruh ${claims.length} butir klaim faktual, data angka, dan rujukan sumber telah terbukti secara individual terhadap isi sumber resmi.`
-                : (parsed.summary || (!hasFetchedSourceContent && hasVerifiableSourceUrl 
-                    ? `⚠️ Perlu Verifikasi Editor: URL sumber terdaftar, namun isi halaman tidak dapat diambil secara otomatis untuk verifikasi fakta.` 
-                    : `⚠️ Perlu Verifikasi Editor: Terdapat ${claims.filter((c: any) => c.status !== 'verified').length} dari ${claims.length} butir klaim yang memerlukan konfirmasi rujukan sumber valid.`)),
+              summary: summaryText,
               unsupportedClaims: Array.isArray(parsed.unsupportedClaims) ? parsed.unsupportedClaims : [],
               missingSourceClaims,
               forbiddenKeywordsFound: Array.isArray(parsed.forbiddenKeywordsFound) ? parsed.forbiddenKeywordsFound : [],
@@ -820,10 +1790,11 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
                 sourceContentFetched: hasFetchedSourceContent,
                 verifiedSourceCount: successfulFetchedSources.length,
                 sourceFetchFailures,
+                sourceStatuses,
                 note: hasFetchedSourceContent
                   ? `${successfulFetchedSources.length} sumber berhasil diambil dan digunakan sebagai ground truth audit.`
                   : (hasVerifiableSourceUrl 
-                      ? 'URL sumber valid terdaftar, tetapi isi halaman belum berhasil diambil.' 
+                      ? `URL sumber terdaftar tetapi mengalami kendala akses teknis (${sourceFetchFailures[0] || 'HTTP 404/Timeout'}). Fakta berita tidak dianggap salah.` 
                       : (validSources.length > 0 ? 'Sumber terdaftar tetapi belum memiliki URL yang dapat diverifikasi.' : 'Sumber rujukan belum dicantumkan.'))
               },
               checkedAt: new Date().toISOString(),
@@ -926,9 +1897,7 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
       } else if (!hasVerifiableSourceUrl) {
         missingSourceClaims.push('Sumber rujukan belum memiliki URL valid yang dapat diverifikasi.');
       } else if (!hasFetchedSourceContent) {
-        missingSourceClaims.push('Sumber tersedia tetapi isi sumber belum berhasil diambil untuk verifikasi otomatis.');
-      } else {
-        missingSourceClaims.push('Audit otomatis AI sedang tidak tersedia. Perlu konfirmasi manual oleh editor sebelum tayang.');
+        missingSourceClaims.push(`SUMBER TIDAK DAPAT DIAKSES: ${sourceFetchFailures[0] || 'Kendala koneksi/HTTP 404'}. Menunggu verifikasi sumber.`);
       }
 
       // Extract individual claims strictly from ALL factsList items first, then content paragraphs
@@ -947,22 +1916,26 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
           type = 'opini_analisis';
         }
 
-        const status: 'needs_verification' | 'missing_source' = (!hasSources || !hasVerifiableSourceUrl) 
+        const status: 'pending_source_verification' | 'needs_verification' | 'missing_source' = (!hasSources || !hasVerifiableSourceUrl) 
           ? 'missing_source' 
-          : 'needs_verification';
+          : (!hasFetchedSourceContent ? 'pending_source_verification' : 'needs_verification');
 
         return {
           id: `claim-${idx + 1}`,
           claim: st,
           type,
-          supported: false, // Fallback tidak pernah mengasumsikan klaim terbukti hanya dari URL
+          supported: false, // Fallback tidak pernah mengasumsikan klaim terbukti tanpa audit AI & teks sumber
           sourceTrace: hasVerifiableSourceUrl 
             ? `${validSources[0].name} (${validSources[0].url})` 
             : (hasSources ? `${validSources[0].name} (URL belum terverifikasi)` : 'Sumber belum tersedia — perlu verifikasi editor.'),
           issue: !hasVerifiableSourceUrl 
             ? 'URL sumber rujukan belum valid' 
-            : 'Perlu konfirmasi verifikasi isi sumber oleh editor/AI',
-          status
+            : (!hasFetchedSourceContent 
+                ? `SUMBER TIDAK DAPAT DIAKSES: ${sourceFetchFailures[0] || 'HTTP 404/Timeout'}. Menunggu verifikasi sumber manual oleh editor (Bukan bukti fakta salah).`
+                : 'Perlu konfirmasi verifikasi isi sumber oleh editor'),
+          status,
+          sourceStatus: (!hasFetchedSourceContent && validSources.length > 0) ? 'sumber_tidak_dapat_diakses' : 'belum_diverifikasi',
+          technicalReason: !hasFetchedSourceContent && sourceFetchFailures.length > 0 ? sourceFetchFailures[0] : undefined
         };
       });
 
@@ -971,11 +1944,15 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
       const canPublish = false;
       const hasUnverifiedClaims = true;
 
+      const fallbackSummary = (!hasFetchedSourceContent && validSources.length > 0)
+        ? `⚠️ Menunggu Verifikasi Sumber: URL sumber rujukan mengalami kendala akses teknis (${sourceFetchFailures.join('; ') || 'HTTP 404/Timeout'}). Fakta naskah TIDAK dianggap salah — silakan periksa akses URL atau konfirmasi secara manual melalui editor.`
+        : `⚠️ Perlu Verifikasi Editor: Ditemukan ${claims.length} butir klaim yang memerlukan konfirmasi rujukan sumber secara manual.`;
+
       const fallbackResult = {
         passed,
         canPublish,
         hasUnverifiedClaims,
-        summary: `⚠️ Perlu Verifikasi Editor: Ditemukan ${claims.length} butir klaim yang memerlukan konfirmasi rujukan sumber secara manual atau pengulangan audit AI.`,
+        summary: fallbackSummary,
         unsupportedClaims: unsupportedList,
         missingSourceClaims,
         forbiddenKeywordsFound: foundForbidden,
@@ -988,10 +1965,11 @@ Pastikan array "claims" memuat audit untuk ${factsList.length > 0 ? `masing-masi
           sourceContentFetched: hasFetchedSourceContent,
           verifiedSourceCount: successfulFetchedSources.length,
           sourceFetchFailures,
+          sourceStatuses,
           note: hasFetchedSourceContent
             ? `${successfulFetchedSources.length} sumber referensi terdaftar (menunggu verifikasi isi oleh editor).`
             : (hasVerifiableSourceUrl 
-                ? 'URL valid tetapi isi sumber belum berhasil diambil untuk verifikasi otomatis.' 
+                ? `URL sumber terdaftar tetapi mengalami kendala akses teknis (${sourceFetchFailures[0] || 'HTTP 404/Timeout'}). Fakta berita tidak dianggap salah.` 
                 : (hasSources ? 'Sumber terdaftar tetapi belum memiliki URL yang dapat diverifikasi.' : 'Sumber belum tersedia — perlu verifikasi editor.'))
         },
         checkedAt: new Date().toISOString(),

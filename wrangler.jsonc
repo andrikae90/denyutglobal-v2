@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "denyutglobal-v2",
+  "main": "server.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "denyutglobal-production-db",
+      "database_id": "fb9b6d17-30c5-4f98-89a0-f89048b62d69",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "APP_URL": "https://denyutglobal.my.id"
+  }
+}

@@ -15,6 +15,17 @@ export type CorrectionType = 'none' | 'corrected' | 'updated' | 'editorial_fix';
 
 export type ClaimType = 'fakta' | 'konteks' | 'opini_analisis';
 
+export type ClaimStatus = 'verified' | 'pending_source_verification' | 'needs_verification' | 'missing_source';
+
+export interface SourceAuditItem {
+  name: string;
+  url: string;
+  status: 'terverifikasi_mendukung' | 'sumber_tidak_dapat_diakses' | 'tidak_mendukung' | 'belum_diverifikasi';
+  statusLabel?: string;
+  technicalError?: string;
+  httpStatus?: number;
+}
+
 export interface FactCheckClaim {
   id: string;
   claim: string;
@@ -22,7 +33,9 @@ export interface FactCheckClaim {
   supported: boolean;
   sourceTrace: string; // Source name/URL or 'Sumber belum tersedia — perlu verifikasi editor.'
   issue?: string; // Reason why it needs verification or warning detail
-  status: 'verified' | 'needs_verification' | 'missing_source';
+  status: ClaimStatus;
+  technicalReason?: string;
+  sourceStatus?: 'terverifikasi_mendukung' | 'sumber_tidak_dapat_diakses' | 'tidak_mendukung' | 'belum_diverifikasi';
 }
 
 export interface FactCheckResult {
@@ -34,12 +47,17 @@ export interface FactCheckResult {
   unsupportedClaims: string[];
   missingSourceClaims: string[];
   forbiddenKeywordsFound: string[];
+  conflictWarnings?: string[];
   checkedAt: string;
   checkedBy?: string;
   sourceAudit: {
     totalSources: number;
     sourcesProvided: boolean;
     sourcesTraceable: boolean;
+    sourceContentFetched?: boolean;
+    verifiedSourceCount?: number;
+    sourceFetchFailures?: string[];
+    sourceStatuses?: SourceAuditItem[];
     note: string;
   };
 }

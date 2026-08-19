@@ -54,7 +54,9 @@ export const Footer: React.FC<FooterProps> = ({
     setStatus('loading');
     setTimeout(() => {
       try {
-        const existingRaw = localStorage.getItem('denyutglobal_subscribers');
+        const existingRaw = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+          ? localStorage.getItem('denyutglobal_subscribers')
+          : null;
         const existingList: { email: string; subscribedAt: string }[] = existingRaw 
           ? JSON.parse(existingRaw) 
           : [];
@@ -65,7 +67,9 @@ export const Footer: React.FC<FooterProps> = ({
             email: trimmed,
             subscribedAt: new Date().toISOString()
           });
-          localStorage.setItem('denyutglobal_subscribers', JSON.stringify(existingList));
+          if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+            localStorage.setItem('denyutglobal_subscribers', JSON.stringify(existingList));
+          }
         }
 
         setStatus('success');

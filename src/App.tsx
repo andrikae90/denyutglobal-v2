@@ -91,6 +91,7 @@ export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isEditorialAuthenticated, setIsEditorialAuthenticated] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return false;
     try {
       return sessionStorage.getItem('denyutglobal_editorial_session') === 'active';
     } catch {
@@ -124,18 +125,52 @@ export default function App() {
     }
   }, []);
 
+  // Fetch articles from API on mount and sync
+  const loadArticlesFromApi = useCallback(async () => {
+    try {
+      if (isEditorialAuthenticated) {
+        const fullEditorial = await editorialStore.fetchEditorialArticlesFromApi();
+        setAllEditorialArticles(fullEditorial);
+      } else {
+        const publishedFromApi = await editorialStore.fetchPublishedArticlesFromApi();
+        const currentAll = editorialStore.getAllArticles();
+        setAllEditorialArticles(currentAll);
+      }
+    } catch (e) {
+      console.warn('Error loading articles from API on mount:', e);
+    }
+  }, [isEditorialAuthenticated]);
+
   useEffect(() => {
     loadWireFeeds(false);
-  }, [loadWireFeeds]);
+    loadArticlesFromApi();
+  }, [loadWireFeeds, loadArticlesFromApi]);
 
-  // Handle saving an editorial article
-  const handleSaveEditorialArticle = (articleToSave: NewsItem) => {
-    editorialStore.saveArticle(articleToSave);
+  // Handle direct navigation to /berita/:slug if not yet present in initial memory
+  useEffect(() => {
+    if (notFoundSlug && !selectedArticle) {
+      editorialStore.fetchArticleBySlugFromApi(notFoundSlug).then((fetched) => {
+        if (fetched && fetched.status === 'published' && fetched.reviewed) {
+          setSelectedArticle(fetched);
+          setNotFoundSlug(null);
+          const currentAll = editorialStore.getAllArticles();
+          setAllEditorialArticles(currentAll);
+        }
+      }).catch((e) => {
+        console.warn('Async article slug fetch error:', e);
+      });
+    }
+  }, [notFoundSlug, selectedArticle]);
+
+  // Handle saving an editorial article (API-first with localStorage fallback)
+  const handleSaveEditorialArticle = async (articleToSave: NewsItem) => {
+    // 1. Instant local update
+    const saved = await editorialStore.saveArticleToApi(articleToSave);
     const updatedAll = editorialStore.getAllArticles();
     setAllEditorialArticles(updatedAll);
     
     if (articleToSave.status === 'published') {
-      showToast('Artikel berhasil dipublikasikan ke portal publik');
+      showToast('Artikel berhasil disimpan dan dipublikasikan ke portal');
     } else if (articleToSave.status === 'review') {
       showToast('Artikel dikirim untuk review redaksi');
     } else {
@@ -143,12 +178,12 @@ export default function App() {
     }
   };
 
-  // Handle deleting an editorial article
-  const handleDeleteEditorialArticle = (id: string) => {
-    editorialStore.deleteArticle(id);
+  // Handle deleting an editorial article (API-first with localStorage fallback)
+  const handleDeleteEditorialArticle = async (id: string) => {
+    await editorialStore.deleteArticleFromApi(id);
     const updatedAll = editorialStore.getAllArticles();
     setAllEditorialArticles(updatedAll);
-    showToast('Naskah artikel berhasil dihapus dari redaksi');
+    showToast('Naskah artikel berhasil dihapus dari database');
   };
 
   // Open Editorial Desk (Checks authentication first)
@@ -160,8 +195,8 @@ export default function App() {
     }
   }, [isEditorialAuthenticated]);
 
-  // Authentication success handler
-  const handleAuthenticateEditorial = () => {
+  // Authentication success handler & auto sync to D1
+  const handleAuthenticateEditorial = async () => {
     try {
       sessionStorage.setItem('denyutglobal_editorial_session', 'active');
     } catch (e) {
@@ -171,6 +206,17 @@ export default function App() {
     setIsAuthModalOpen(false);
     setIsEditorOpen(true);
     showToast('Akses Ruang Redaksi berhasil dibuka');
+
+    // Trigger background sync from localStorage to server D1
+    try {
+      const syncResult = await editorialStore.syncLocalToApi();
+      if (syncResult.success) {
+        const fullEditorial = await editorialStore.fetchEditorialArticlesFromApi();
+        setAllEditorialArticles(fullEditorial);
+      }
+    } catch (syncErr) {
+      console.warn('Initial editorial sync warning:', syncErr);
+    }
   };
 
   // Logout / Lock Editorial session
@@ -187,6 +233,9 @@ export default function App() {
 
   // LocalStorage bookmarks initialization
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+      return ['art-001'];
+    }
     try {
       const saved = localStorage.getItem('denyutglobal_bookmarks');
       return saved ? JSON.parse(saved) : ['art-001'];
@@ -196,6 +245,7 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return;
     try {
       localStorage.setItem('denyutglobal_bookmarks', JSON.stringify(bookmarkedIds));
     } catch (e) {

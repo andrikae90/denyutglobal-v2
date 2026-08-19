@@ -191,6 +191,23 @@ export const EditorialAuthModal: React.FC<EditorialAuthModalProps> = ({
 
       if (computedHash.toLowerCase() === expectedHash) {
         // AUTENTIKASI BERHASIL
+        // Hubungi endpoint server untuk mendapatkan session token otorisasi API
+        try {
+          const res = await fetch('/api/editorial/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passphraseHash: computedHash.toLowerCase() })
+          });
+          if (res.ok) {
+            const authData = await res.json();
+            if (authData.token) {
+              sessionStorage.setItem('denyutglobal_editorial_token', authData.token);
+            }
+          }
+        } catch (authFetchErr) {
+          console.warn('Server auth exchange warning (continuing with local session):', authFetchErr);
+        }
+
         // Hapus catatan percobaan gagal
         try {
           sessionStorage.removeItem(STORAGE_FAILED_ATTEMPTS_KEY);
