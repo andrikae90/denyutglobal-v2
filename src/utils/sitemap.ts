@@ -1,7 +1,7 @@
 import { NewsItem } from '../types';
 import { getArticleSlug } from './slug';
 
-const SITEMAP_BASE_DOMAIN = 'https://denyutglobal.ai.studio';
+const SITEMAP_BASE_DOMAIN = 'https://denyutglobal.my.id';
 
 /**
  * Generates valid XML sitemap string conforming to http://www.sitemaps.org/schemas/sitemap/0.9

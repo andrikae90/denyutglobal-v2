@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { CategoryId, NewsItem } from './types';
 import { editorialStore } from './data/editorialStore';
 import { newsService } from './services/newsService';
-import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId } from './utils/slug';
+import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId, updateCanonicalUrl, PRODUCTION_CANONICAL_DOMAIN } from './utils/slug';
+import { updateStructuredData } from './utils/schema';
+import { updateOpenGraphMetadata } from './utils/openGraph';
 import { Navbar } from './components/Navbar';
 import { BreakingTicker } from './components/BreakingTicker';
 import { SampleDataBanner } from './components/SampleDataBanner';
@@ -187,12 +189,26 @@ export default function App() {
   };
 
   // Open Editorial Desk (Checks authentication first)
-  const handleOpenEditorialDesk = useCallback(() => {
-    if (isEditorialAuthenticated) {
-      setIsEditorOpen(true);
-    } else {
-      setIsAuthModalOpen(true);
+  const handleOpenEditorialDesk = useCallback(async () => {
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('denyutglobal_editorial_token') : null;
+    if (isEditorialAuthenticated && token) {
+      try {
+        const verifyRes = await fetch('/api/editorial/session', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (verifyRes.ok) {
+          setIsEditorOpen(true);
+          return;
+        }
+      } catch (e) {
+        // In case of network check failure, allow opening editor with active session
+        setIsEditorOpen(true);
+        return;
+      }
     }
+    // If no valid session or token expired, request re-authentication
+    setIsEditorialAuthenticated(false);
+    setIsAuthModalOpen(true);
   }, [isEditorialAuthenticated]);
 
   // Authentication success handler & auto sync to D1
@@ -223,6 +239,7 @@ export default function App() {
   const handleLogoutEditorial = useCallback(() => {
     try {
       sessionStorage.removeItem('denyutglobal_editorial_session');
+      sessionStorage.removeItem('denyutglobal_editorial_token');
     } catch (e) {
       console.error('Failed to remove editorial session from sessionStorage', e);
     }
@@ -382,7 +399,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [publishedArticles, allEditorialArticles]);
 
-  // Synchronize canonical URL for active article (e.g. converting ID or old query param to SEO slug)
+  // Synchronize canonical URL and browser history for active article or homepage
   useEffect(() => {
     try {
       if (selectedArticle && selectedArticle.status === 'published' && selectedArticle.reviewed) {
@@ -397,9 +414,23 @@ export default function App() {
           const newUrl = remainingSearch ? `${targetPath}?${remainingSearch}` : targetPath;
           window.history.replaceState({ articleId: selectedArticle.id, slug }, '', newUrl);
         }
+
+        // Set dynamic canonical URL for active article
+        updateCanonicalUrl(`${PRODUCTION_CANONICAL_DOMAIN}/berita/${slug}`);
+        // Inject dynamic NewsArticle & BreadcrumbList structured data
+        updateStructuredData(selectedArticle);
+        // Inject dynamic Open Graph & Twitter Card metadata
+        updateOpenGraphMetadata(selectedArticle);
+      } else {
+        // Revert canonical URL to homepage when no article is active
+        updateCanonicalUrl(`${PRODUCTION_CANONICAL_DOMAIN}/`);
+        // Clean up article structured data on homepage
+        updateStructuredData(null);
+        // Revert Open Graph & Twitter Card metadata to homepage
+        updateOpenGraphMetadata(null);
       }
     } catch (e) {
-      console.warn('URL synchronization failed:', e);
+      console.warn('URL or canonical synchronization failed:', e);
     }
   }, [selectedArticle]);
 

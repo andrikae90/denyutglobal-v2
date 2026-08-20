@@ -3,4 +3,4 @@ Allow: /
 Disallow: /redaksi
 Disallow: /editorial
 
-Sitemap: https://denyutglobal.id/sitemap.xml
+Sitemap: https://denyutglobal.my.id/sitemap.xml

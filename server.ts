@@ -307,6 +307,58 @@ function getD1Database(req?: express.Request): any | null {
          null;
 }
 
+function resolveD1Config(): { accountId?: string; databaseId?: string; apiToken?: string } {
+  let accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  let apiToken = (
+    process.env.CLOUDFLARE_API_TOKEN ||
+    process.env.CLOUDFLARE_AUTH_TOKEN ||
+    process.env.CF_API_TOKEN
+  )?.trim();
+  let databaseId = (
+    process.env.CLOUDFLARE_D1_DATABASE_ID ||
+    process.env.CLOUDFLARE_DATABASE_ID
+  )?.trim();
+
+  const isUuid = (v?: string): boolean =>
+    Boolean(v && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim()));
+  const isHex32 = (v?: string): boolean =>
+    Boolean(v && /^[0-9a-f]{32}$/i.test(v.trim()));
+
+  // Auto-detect if databaseId is set to an API token (starts with cfut_) and apiToken is missing/swapped
+  if (databaseId && databaseId.startsWith('cfut_') && (!apiToken || !apiToken.startsWith('cfut_'))) {
+    apiToken = databaseId;
+    databaseId = undefined;
+  } else if (databaseId && !isUuid(databaseId)) {
+    // If not a valid UUID (e.g. database_name string or invalid placeholder), reset so we fallback to wrangler.jsonc
+    databaseId = undefined;
+  }
+
+  // Fallback to wrangler.jsonc for database_id and account_id
+  if (!databaseId || !accountId || !isHex32(accountId)) {
+    try {
+      const wranglerPath = path.join(process.cwd(), 'wrangler.jsonc');
+      if (fs.existsSync(wranglerPath)) {
+        const raw = fs.readFileSync(wranglerPath, 'utf-8');
+        const accountMatch = raw.match(/"account_id"\s*:\s*"([^"]+)"/);
+        const dbMatch = raw.match(/"database_id"\s*:\s*"([^"]+)"/);
+        if ((!accountId || !isHex32(accountId)) && accountMatch && accountMatch[1]) {
+          accountId = accountMatch[1].trim();
+        }
+        if (!databaseId && dbMatch && dbMatch[1]) {
+          const extractedDbId = dbMatch[1].trim();
+          if (isUuid(extractedDbId)) {
+            databaseId = extractedDbId;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read D1 credentials from wrangler.jsonc:', e);
+    }
+  }
+
+  return { accountId, databaseId, apiToken };
+}
+
 export interface D1ExecutionResult<T = any> {
   success: boolean;
   results: T[];
@@ -343,32 +395,8 @@ async function executeD1Query<T = any>(
     }
   }
 
-  // 2. Coba Cloudflare D1 v4 REST API (jika kredensial Cloudflare tersedia di environment)
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  let apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  let databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || process.env.CLOUDFLARE_DATABASE_ID;
-
-  // Auto-detect if token and database_id are swapped in env vars
-  if (databaseId && databaseId.startsWith('cfut_') && apiToken && !apiToken.startsWith('cfut_')) {
-    const temp = apiToken;
-    apiToken = databaseId;
-    databaseId = temp;
-  }
-
-  if (!databaseId || databaseId === 'REPLACE_WITH_YOUR_CLOUDFLARE_D1_DATABASE_ID') {
-    try {
-      const wranglerPath = path.join(process.cwd(), 'wrangler.jsonc');
-      if (fs.existsSync(wranglerPath)) {
-        const raw = fs.readFileSync(wranglerPath, 'utf-8');
-        const cleanJson = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-        const parsed = JSON.parse(cleanJson);
-        const d1 = parsed?.d1_databases?.[0];
-        if (d1?.database_id && d1.database_id !== 'REPLACE_WITH_YOUR_CLOUDFLARE_D1_DATABASE_ID') {
-          databaseId = d1.database_id;
-        }
-      }
-    } catch {}
-  }
+  // 2. Coba Cloudflare D1 v4 REST API (Node.js runtime / AI Studio Preview)
+  const { accountId, databaseId, apiToken } = resolveD1Config();
 
   if (accountId && apiToken && databaseId) {
     try {
@@ -382,7 +410,7 @@ async function executeD1Query<T = any>(
         body: JSON.stringify({ sql, params })
       });
 
-      const json = await apiRes.json();
+      const json: any = await apiRes.json();
       if (json.success && Array.isArray(json.result) && json.result[0]) {
         const queryRes = json.result[0];
         return {
@@ -393,6 +421,7 @@ async function executeD1Query<T = any>(
         };
       } else {
         const errMsg = json.errors?.[0]?.message || JSON.stringify(json.errors) || 'Gagal mengeksekusi D1 REST API query';
+        console.error('[Cloudflare D1 REST API Error]:', errMsg);
         return {
           success: false,
           results: [],
@@ -401,7 +430,7 @@ async function executeD1Query<T = any>(
         };
       }
     } catch (apiErr: any) {
-      console.error('Error connecting to Cloudflare D1 REST API:', apiErr);
+      console.error('[Cloudflare D1 Network Error]:', apiErr);
       return {
         success: false,
         results: [],
@@ -411,10 +440,18 @@ async function executeD1Query<T = any>(
     }
   }
 
+  const missing: string[] = [];
+  if (!accountId) missing.push('CLOUDFLARE_ACCOUNT_ID');
+  if (!apiToken) missing.push('CLOUDFLARE_API_TOKEN');
+  if (!databaseId) missing.push('CLOUDFLARE_D1_DATABASE_ID');
+
+  const errorMsg = `Cloudflare D1 binding (env.DB) atau kredensial Cloudflare D1 REST API (${missing.join(', ')}) belum terhubung.`;
+  console.warn('[D1 Config Warning]:', errorMsg);
+
   return {
     success: false,
     results: [],
-    error: 'Cloudflare D1 binding (env.DB) atau kredensial Cloudflare D1 REST API (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_D1_DATABASE_ID) belum terhubung.',
+    error: errorMsg,
     source: 'none'
   };
 }
@@ -548,8 +585,7 @@ async function startServer() {
 
   // Robots.txt
   app.get('/robots.txt', (req, res) => {
-    const defaultDomain = 'https://ais-pre-vvmbqfdh7npn7qfkviyfzd-652622621922.asia-east1.run.app';
-    const domain = (process.env.APP_URL || defaultDomain).replace(/\/+$/, '');
+    const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
     res.type('text/plain');
     res.send(`User-agent: *\nAllow: /\nDisallow: /redaksi\nDisallow: /editorial\n\nSitemap: ${domain}/sitemap.xml\n`);
   });
@@ -593,7 +629,7 @@ async function startServer() {
       }
 
       if (inputHash === EDITORIAL_PASSPHRASE_SHA256_HASH.toLowerCase()) {
-        const sessionToken = `dg_${crypto.randomBytes(24).toString('hex')}`;
+        const sessionToken = `dg_${crypto.randomUUID().replace(/-/g, '')}`;
         const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 jam
         activeEditorialSessions.set(sessionToken, expiresAt);
 
@@ -616,6 +652,16 @@ async function startServer() {
         error: 'Terjadi kesalahan pada verifikasi sesi redaksi.'
       });
     }
+  });
+
+  // GET /api/editorial/session - Memeriksa keabsahan sesi redaksi aktif
+  app.get('/api/editorial/session', (req, res) => {
+    const authHeader = (req.headers['authorization'] || req.headers['x-editorial-token']) as string | undefined;
+    const isValid = verifyEditorialToken(authHeader);
+    if (isValid) {
+      return res.json({ success: true, valid: true, message: 'Sesi redaksi aktif.' });
+    }
+    return res.status(401).json({ success: false, valid: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' });
   });
 
   // =====================================================================
@@ -2440,6 +2486,17 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+// Only run standalone HTTP server if running directly in Node.js environment
+if (typeof process !== 'undefined' && process.env && !process.env.WORKER_ENV) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}
+
+// Export default worker interface for Cloudflare Workers compatibility
+export default {
+  async fetch(request: Request, env: any, ctx: any): Promise<Response> {
+    const workerModule = await import('./worker');
+    return workerModule.default.fetch(request, env, ctx);
+  }
+};

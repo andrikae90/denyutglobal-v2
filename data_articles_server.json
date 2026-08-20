@@ -1,47 +1,78 @@
 [
   {
-    "id": "art-test-d1-1787149145895",
-    "slug": "uji-coba-integrasi-database-cloudflare-d1-berhasil",
+    "id": "art-test-d1-1787213810387",
     "title": "Uji Coba Integrasi Database Cloudflare D1 Berhasil",
-    "summary": "Pengujian alur penyimpanan artikel dari aplikasi melalui API ke Cloudflare D1.",
-    "content": [
-      "Paragraf 1: Pengujian alur aplikasi menuju API kemudian melakukan eksekusi SQL INSERT ke Cloudflare D1.",
-      "Paragraf 2: Verifikasi langsung dilakukan untuk membuktikan data tersimpan secara persisten pada tabel articles."
-    ],
-    "facts": [
-      "Database: Cloudflare D1 denyutglobal-production-db",
-      "Metode: Real API POST request dengan D1 SQL INSERT"
-    ],
-    "whyItMatters": "Memastikan arsitektur database Cloudflare D1 berfungsi penuh secara persisten.",
+    "slug": "uji-coba-integrasi-database-cloudflare-d1-berhasil",
     "category": "teknologi",
     "categoryLabel": "Teknologi",
     "location": "Jakarta, Indonesia",
     "author": "Redaksi DenyutGlobal",
-    "status": "published",
-    "reviewed": true,
-    "isEditorial": true,
-    "sources": [
-      {
-        "name": "DenyutGlobal Core",
-        "url": "https://denyutglobal.my.id"
-      }
+    "publishedAt": "2026-08-20T08:16:50.387Z",
+    "status": "draft",
+    "reviewed": false,
+    "summary": "Artikel uji coba sinkronisasi Cloudflare D1 production database dari preview environment.",
+    "content": [
+      "Paragraf pertama pengujian sinkronisasi draft ke Cloudflare D1 production database."
     ],
-    "image": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
-    "imageCredit": "Unsplash / DenyutGlobal",
+    "facts": [
+      "Fakta uji 1: Integrasi D1 v4 REST API berjalan sempurna."
+    ],
+    "whyItMatters": "Memastikan redaksi dapat menyimpan draft naskah langsung ke D1.",
+    "isEditorial": true,
     "judul": "Uji Coba Integrasi Database Cloudflare D1 Berhasil",
-    "ringkasan": "Pengujian alur penyimpanan artikel dari aplikasi melalui API ke Cloudflare D1.",
+    "ringkasan": "Artikel uji coba sinkronisasi Cloudflare D1 production database dari preview environment.",
     "isiLengkap": [
-      "Paragraf 1: Pengujian alur aplikasi menuju API kemudian melakukan eksekusi SQL INSERT ke Cloudflare D1.",
-      "Paragraf 2: Verifikasi langsung dilakukan untuk membuktikan data tersimpan secara persisten pada tabel articles."
+      "Paragraf pertama pengujian sinkronisasi draft ke Cloudflare D1 production database."
     ],
     "kategori": "teknologi",
     "kategoriLabel": "Teknologi",
     "negaraLokasi": "Jakarta, Indonesia",
-    "tanggal": "19 Agustus 2026",
-    "waktu": "15:21 WIB",
-    "gambar": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
+    "tanggal": "20 Agustus 2026",
+    "waktu": "08:16 WIB",
+    "image": "",
+    "gambar": "",
     "captionGambar": "",
     "imageType": "none",
+    "imageCredit": "",
+    "sources": [],
+    "sourceUrls": []
+  },
+  {
+    "id": "art-test-d1-1787149145895",
+    "title": "Uji Coba Integrasi Database Cloudflare D1 Berhasil",
+    "slug": "uji-coba-integrasi-database-cloudflare-d1-berhasil",
+    "category": "teknologi",
+    "categoryLabel": "Teknologi",
+    "location": "Jakarta, Indonesia",
+    "author": "Redaksi DenyutGlobal",
+    "publishedAt": "2026-08-20T08:16:58.906Z",
+    "status": "draft",
+    "reviewed": false,
+    "summary": "Artikel uji coba sinkronisasi Cloudflare D1 production database dari preview environment (Updated).",
+    "content": [
+      "Paragraf pertama pengujian sinkronisasi draft ke Cloudflare D1 production database."
+    ],
+    "facts": [
+      "Fakta uji: Integrasi D1 v4 REST API berjalan sempurna."
+    ],
+    "whyItMatters": "Memastikan redaksi dapat menyimpan draft naskah langsung ke D1.",
+    "isEditorial": true,
+    "judul": "Uji Coba Integrasi Database Cloudflare D1 Berhasil",
+    "ringkasan": "Artikel uji coba sinkronisasi Cloudflare D1 production database dari preview environment (Updated).",
+    "isiLengkap": [
+      "Paragraf pertama pengujian sinkronisasi draft ke Cloudflare D1 production database."
+    ],
+    "kategori": "teknologi",
+    "kategoriLabel": "Teknologi",
+    "negaraLokasi": "Jakarta, Indonesia",
+    "tanggal": "20 Agustus 2026",
+    "waktu": "08:16 WIB",
+    "image": "",
+    "gambar": "",
+    "captionGambar": "",
+    "imageType": "none",
+    "imageCredit": "",
+    "sources": [],
     "sourceUrls": []
   },
   {

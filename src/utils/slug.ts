@@ -35,6 +35,28 @@ export function getArticleSlug(article: NewsItem): string {
   return generated || article.id;
 }
 
+export const PRODUCTION_CANONICAL_DOMAIN = 'https://denyutglobal.my.id';
+
+/**
+ * Updates or creates the single <link rel="canonical"> in document.head.
+ * Ensures strictly only one canonical element exists on the page.
+ */
+export function updateCanonicalUrl(url: string) {
+  if (typeof document === 'undefined') return;
+  const canonicalLinks = document.querySelectorAll('link[rel="canonical"]');
+  if (canonicalLinks.length > 0) {
+    (canonicalLinks[0] as HTMLLinkElement).href = url;
+    for (let i = 1; i < canonicalLinks.length; i++) {
+      canonicalLinks[i].remove();
+    }
+  } else {
+    const link = document.createElement('link');
+    link.rel = 'canonical';
+    link.href = url;
+    document.head.appendChild(link);
+  }
+}
+
 /**
  * Returns the full SEO URL for an article (/berita/[slug-artikel]).
  */
@@ -43,10 +65,10 @@ export function getArticleUrl(article: NewsItem): string {
   try {
     const origin = typeof window !== 'undefined' && window.location.origin
       ? window.location.origin
-      : 'https://denyutglobal.ai.studio';
+      : PRODUCTION_CANONICAL_DOMAIN;
     return `${origin}/berita/${slug}`;
   } catch {
-    return `https://denyutglobal.ai.studio/berita/${slug}`;
+    return `${PRODUCTION_CANONICAL_DOMAIN}/berita/${slug}`;
   }
 }
 

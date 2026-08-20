@@ -463,6 +463,8 @@ export class EditorialStore {
           this.isInitializedFromApi = true;
           return [...this.articles];
         }
+      } else if (res.status === 401) {
+        console.warn('[EditorialStore] Sesi redaksi kedaluwarsa saat fetch artikel.');
       }
     } catch (e) {
       console.warn('Could not fetch editorial articles from API, fallback to local store:', e);
@@ -508,7 +510,7 @@ export class EditorialStore {
    * Simpan artikel (Asinkron API-First dengan fallback sinkron ke LocalStorage)
    */
   public async saveArticleToApi(article: NewsItem, token?: string): Promise<NewsItem> {
-    // 1. Simpan ke local memori & storage terlebih dahulu agar UI instan
+    // 1. Simpan ke local memori & storage terlebih dahulu agar UI responsif & aman offline
     const savedLocal = this.saveArticle(article);
 
     // 2. Simpan ke backend API D1
@@ -535,11 +537,24 @@ export class EditorialStore {
             this.articles[idx] = json.data;
           }
           this.saveToStorage();
+
+          if (json.d1_persisted) {
+            console.log(`[EditorialStore] Sukses tersimpan ke Cloudflare D1 (${json.d1_source}): "${json.data.title}"`);
+          } else {
+            console.warn(`[EditorialStore] Disimpan di server fallback (${json.d1_source}): ${json.warning || json.message}`);
+          }
           return json.data;
+        }
+      } else {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.message || errJson?.error || res.statusText;
+        console.error(`[EditorialStore] Gagal menyimpan artikel ke API (HTTP ${res.status}):`, errMsg);
+        if (res.status === 401) {
+          console.warn('[EditorialStore] Sesi redaksi tidak valid / kedaluwarsa. Token otorisasi diperlukan.');
         }
       }
     } catch (e) {
-      console.warn('API save failed, article kept in offline local storage:', e);
+      console.warn('[EditorialStore] API save failed, article kept in offline local storage:', e);
     }
 
     return savedLocal;

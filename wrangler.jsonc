@@ -1,11 +1,17 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "denyutglobal-v2",
-  "main": "server.ts",
+  "account_id": "edb5b02c7ef24b25bb1ce9a98415e201",
+  "main": "worker.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
   "d1_databases": [
     {
       "binding": "DB",
