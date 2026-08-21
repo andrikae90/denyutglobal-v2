@@ -840,15 +840,22 @@ Kembalikan HANYA format JSON valid:
       }
     }
 
-    // 14. FACT CHECK (POST /api/editorial/fact-check)
-    if (pathname === '/api/editorial/fact-check' && method === 'POST') {
+    // 14. FACT CHECK (POST /api/editorial/fact-check or /api/ai/fact-check)
+    if ((pathname === '/api/editorial/fact-check' || pathname === '/api/ai/fact-check') && method === 'POST') {
       try {
         const body: any = await request.json();
-        const { title = '', facts = [], claims = [] } = body || {};
+        const { title = '', facts = [], claims = [], sources = [], content = [] } = body || {};
 
         const prompt = `Lakukan audit integritas dan verifikasi fakta untuk naskah berita berikut:
 Judul: ${title}
-Fakta: ${Array.isArray(facts) ? facts.join('; ') : facts}
+Fakta Acuan: ${Array.isArray(facts) ? facts.join('; ') : facts}
+Sumber: ${JSON.stringify(sources)}
+
+ATURAN AUDIT FAKTA:
+1. Fokus pada KEBENARAN FAKTA dan KESESUAIAN DENGAN SUMBER.
+2. Jangan menandai klaim hanya karena pilihan kata atau gaya bahasa (seperti "memastikan", "pasti", "jelas", "penting", "signifikan").
+3. Jika sumber mendukung klaim (contoh: "BMKG memastikan gempa tidak berpotensi tsunami"), tandai sebagai verified/fakta terverifikasi.
+4. Periksa dengan sangat ketat angka, tanggal, waktu, lokasi, nama, jabatan, jumlah, dan kutipan.
 
 Kembalikan format JSON valid:
 {
@@ -891,6 +898,140 @@ Kembalikan format JSON valid:
         });
       } catch (err: any) {
         return jsonResponse({ success: false, error: 'Gagal melakukan verifikasi fakta.' }, 500);
+      }
+    }
+
+    // 14B. AI DRAFT REVISION / REFINE (POST /api/ai/refine-draft)
+    if (pathname === '/api/ai/refine-draft' && method === 'POST') {
+      try {
+        const body: any = await request.json();
+        const {
+          title = '',
+          summary = '',
+          content = [],
+          facts = '',
+          roughNotes = '',
+          sources = [],
+          category = 'Dunia',
+          location = '',
+          whyItMatters = '',
+          factCheckResult = null,
+          instructions = ''
+        } = body || {};
+
+        const contentText = Array.isArray(content) ? content.join('\n\n') : String(content || '');
+        const validSources = Array.isArray(sources)
+          ? sources.filter((s: any) => s && (s.name?.trim() || s.url?.trim()))
+          : [];
+
+        const refinePrompt = `Anda adalah EDITOR NASKAH SENIOR di DenyutGlobal.
+Tugas utama: Memperbaiki bahasa, struktur, keterbacaan, dan kualitas jurnalistik naskah berdasarkan fakta yang sudah tersedia dan terverifikasi, TANPA mengubah fakta.
+
+DATA NASKAH:
+- Judul: ${title || '(Kosong)'}
+- Kategori: ${category}
+- Lokasi: ${location || 'Internasional'}
+- Ringkasan: ${summary || '(Kosong)'}
+- Fakta Utama:
+${facts || '(Kosong)'}
+- Isi Naskah:
+${contentText || '(Kosong)'}
+- Mengapa Penting:
+${whyItMatters || '(Kosong)'}
+- Sumber:
+${validSources.map((s: any) => `- ${s.name} (${s.url})`).join('\n') || '-'}
+- Instruksi Editor:
+${instructions || 'Perbaiki struktur dan bahasa naskah.'}
+
+Kembalikan HANYA format JSON valid:
+{
+  "title": "string",
+  "summary": "string",
+  "facts": ["string"],
+  "content": ["string (Paragraf 1)", "string (Paragraf 2)", "string (Paragraf 3)", "string (Paragraf 4)"],
+  "whyItMatters": "string",
+  "changesSummary": ["string"],
+  "conflictWarnings": ["string"],
+  "statusFakta": "string"
+}`;
+
+        const rawGeminiText = await generateGeminiContentRest(env, refinePrompt);
+        if (rawGeminiText) {
+          try {
+            const parsed = JSON.parse(rawGeminiText);
+            return jsonResponse({
+              success: true,
+              source: 'gemini',
+              revisedDraft: {
+                title: parsed.title || title,
+                summary: parsed.summary || summary,
+                facts: Array.isArray(parsed.facts) ? parsed.facts : (facts ? facts.split('\n').filter(Boolean) : []),
+                content: Array.isArray(parsed.content) ? parsed.content : (contentText ? [contentText] : []),
+                whyItMatters: parsed.whyItMatters || whyItMatters,
+                changesSummary: Array.isArray(parsed.changesSummary) && parsed.changesSummary.length > 0
+                  ? parsed.changesSummary
+                  : ['Naskah diselaraskan dengan instruksi editor', 'Placeholder dibersihkan', 'Fakta utama dipertahankan'],
+                conflictWarnings: Array.isArray(parsed.conflictWarnings) ? parsed.conflictWarnings : [],
+                statusFakta: parsed.statusFakta || (validSources.length > 0 ? 'Terverifikasi terhadap rujukan terdaftar' : 'Perlu verifikasi sumber')
+              }
+            });
+          } catch (pe) {
+            console.warn('Gemini refine-draft JSON parse error in worker:', pe);
+          }
+        }
+
+        // Algorithmic Refinement Fallback
+        const rawFactList = typeof facts === 'string' ? facts.split('\n').map((f: string) => f.trim().replace(/^[-*•0-9.]\s*/, '')).filter(Boolean) : [];
+        let cleanedTitle = (title || '').trim().replace(/^(ANTARA|Reuters|AFP|DW|BBC|Badan Geologi|BMKG|Polri|Kemenkes|KPK|BNPB):\s*/i, '').replace(/\.\.\.|\[\.\.\.\]/g, '').trim();
+        if (!cleanedTitle && rawFactList.length > 0) {
+          cleanedTitle = rawFactList[0].length > 80 ? rawFactList[0].slice(0, 80) + '...' : rawFactList[0];
+        } else if (!cleanedTitle) {
+          cleanedTitle = `Pencatatan Perkembangan Data Terkini Sektor ${category}`;
+        }
+
+        let cleanedSummary = (summary || '').replace(/\.\.\.|\[\.\.\.\]|\[isi\]|\[placeholder\]/gi, '').trim();
+        if (!cleanedSummary && rawFactList.length > 0) {
+          cleanedSummary = rawFactList.slice(0, 2).join('. ') + '.';
+        } else if (!cleanedSummary) {
+          cleanedSummary = `Perkembangan data dan fakta peristiwa sektor ${category.toLowerCase()} telah dirilis secara resmi oleh pihak berwenang.`;
+        }
+
+        let paragraphs: string[] = [];
+        if (contentText.trim()) {
+          paragraphs = contentText.split('\n\n').map((p: string) => p.trim().replace(/\.\.\.|\[\.\.\.\]|\[isi\]|TODO|PLACEHOLDER/gi, '')).filter((p: string) => p.length > 10);
+        }
+        if (paragraphs.length === 0) {
+          if (rawFactList.length >= 2) {
+            paragraphs = [
+              `${location ? location.toUpperCase() + ' — ' : ''}${rawFactList[0]}${rawFactList[0].endsWith('.') ? '' : '.'}`,
+              rawFactList.slice(1).join('. ') + '.'
+            ];
+          } else {
+            paragraphs = [`${location ? location.toUpperCase() + ' — ' : ''}${cleanedSummary}`];
+          }
+        }
+
+        return jsonResponse({
+          success: true,
+          source: 'algorithmic',
+          revisedDraft: {
+            title: cleanedTitle,
+            summary: cleanedSummary,
+            facts: rawFactList.length > 0 ? rawFactList : [cleanedSummary],
+            content: paragraphs,
+            whyItMatters: (whyItMatters || '').trim() || 'Informasi ini relevan bagi publik guna memantau perkembangan terkini secara objektif.',
+            changesSummary: [
+              'Semua poin fakta utama diintegrasikan ke dalam isi naskah',
+              'Placeholder dan tanda elipsis (...) dibersihkan',
+              'Tata bahasa dan keterbacaan diselaraskan'
+            ],
+            conflictWarnings: [],
+            statusFakta: validSources.length > 0 ? 'Terverifikasi terhadap rujukan terdaftar' : 'Perlu verifikasi sumber'
+          }
+        });
+      } catch (err: any) {
+        console.error('Worker refine draft error:', err);
+        return jsonResponse({ success: false, error: 'Gagal memproses perbaikan naskah.' }, 500);
       }
     }
 

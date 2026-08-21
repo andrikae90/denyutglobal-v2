@@ -778,9 +778,7 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     }
 
     // Local deterministic fact checking fallback
-    const forbiddenSuperlatives = ['terbukti', 'pasti', 'terbesar', 'bersejarah', 'spektakuler', 'menghebohkan'];
     const lowerContent = `${title} ${summary} ${content}`.toLowerCase();
-    const foundBadWords = forbiddenSuperlatives.filter(word => lowerContent.includes(word));
 
     const forbiddenPhrases = [
       'sedang dalam penelaahan redaksi',
@@ -801,19 +799,18 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     const foundTemplates = forbiddenPhrases.filter(phrase => lowerContent.includes(phrase));
     const hasPlaceholders = /\.\.\.|\[\.\.\.\]|\[isi\]|\[nama\]|\[tanggal\]|\[lokasi\]|\[placeholder\]/i.test(lowerContent);
 
-    const hasIssues = validSources.length === 0 || foundBadWords.length > 0 || foundTemplates.length > 0 || hasPlaceholders;
+    const hasIssues = validSources.length === 0 || foundTemplates.length > 0 || hasPlaceholders;
     const fallbackResult: FactCheckResult = {
       passed: !hasIssues,
       canPublish: !hasIssues,
       hasUnverifiedClaims: hasIssues,
       unsupportedClaims: [
         ...(validSources.length === 0 ? ['Sumber rujukan belum dicantumkan secara lengkap.'] : []),
-        ...(foundBadWords.length > 0 ? [`Ditemukan kata berpotensi hiperbola: "${foundBadWords.join(', ')}"`] : []),
         ...(foundTemplates.length > 0 ? [`Memuat kalimat template internal yang dilarang: "${foundTemplates.join('", "')}"`] : []),
         ...(hasPlaceholders ? ['Memuat tanda placeholder atau "..." yang dilarang dalam naskah.'] : [])
       ],
       missingSourceClaims: validSources.length === 0 ? ['Semua klaim memerlukan rujukan sumber valid'] : [],
-      forbiddenKeywordsFound: foundBadWords,
+      forbiddenKeywordsFound: [],
       claims: [
         {
           id: 'claim-1',
@@ -838,8 +835,6 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
         ? 'Terdapat placeholder atau tanda "..." yang harus dilengkapi terlebih dahulu.'
         : foundTemplates.length > 0
         ? `Naskah memuat kalimat template internal (${foundTemplates.join(', ')}) yang dilarang.`
-        : foundBadWords.length > 0
-        ? `Naskah memuat kata sensitif (${foundBadWords.join(', ')}) yang memerlukan kehati-hatian redaksi.`
         : 'Audit lokal: Naskah mematuhi kaidah penulisan dan integritas fakta.'
     };
 
@@ -940,7 +935,7 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
       const checkRes = await runFactCheck(false);
       if (checkRes && checkRes.hasUnverifiedClaims) {
         setFactCheckWarning(checkRes.summary || '⚠️ Perlu Verifikasi');
-        setFormError('⚠️ Perlu Verifikasi: Ditemukan klaim yang belum didukung fakta/sumber atau memuat kata hiperbola. Harap periksa rincian klaim di tab Audit Fakta.');
+        setFormError('⚠️ Perlu Verifikasi: Ditemukan klaim atau data yang belum didukung oleh sumber rujukan terverifikasi. Harap periksa rincian klaim di tab Audit Fakta.');
         return;
       }
     }

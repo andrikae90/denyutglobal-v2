@@ -94,15 +94,17 @@ export const ArticleRevisionPanel: React.FC<ArticleRevisionPanelProps> = ({
         })
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
 
-      if (response.ok && data.success && data.revisedDraft) {
+      if (response.ok && data?.success && data?.revisedDraft) {
         setRevisedResult(data.revisedDraft);
       } else {
-        setErrorMessage(data.error || 'Perbaikan gagal dijalankan. Naskah asli tetap aman dan tidak berubah.');
+        const technicalError = data?.details || data?.error || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('Refine Draft API call returned error:', technicalError, data);
+        setErrorMessage(data?.error || 'Perbaikan gagal dijalankan. Naskah asli tetap aman dan tidak berubah.');
       }
     } catch (err: any) {
-      console.error('Refine Draft API call failed:', err);
+      console.error('Refine Draft API call failed with exception:', err);
       setErrorMessage('Perbaikan gagal dijalankan. Naskah asli tetap aman dan tidak berubah.');
     } finally {
       setIsProcessing(false);

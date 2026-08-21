@@ -1412,7 +1412,7 @@ Kembalikan HANYA format JSON valid:
     };
 
     const hasVerifiableSourceUrl = validSources.some(s => isUrlVerifiable(s.url));
-    const forbiddenWords = ['terbukti', 'pasti', 'terbesar', 'bersejarah', 'spektakuler', 'menghebohkan', 'memperkuat', 'menjadi bukti'];
+    const forbiddenWords: string[] = []; // Fokus audit fakta murni: tidak memblokir kata gaya bahasa secara otomatis
 
     // Tahap 2: Lakukan fetching isi teks aktual dari sumber-sumber yang memiliki URL valid
     const fetchedSourceData: Array<{ 
@@ -1507,9 +1507,16 @@ Kembalikan HANYA format JSON valid:
       const factCheckPrompt = `Anda adalah Verifikator Fakta & Auditor Integritas Editorial Independen di DenyutGlobal (media kredibel berbahasa Indonesia dengan standar verifikasi fakta tertinggi).
 Tugas Anda adalah melakukan audit investigatif dan verifikasi kebenaran secara ketat terhadap setiap klaim, angka, kutipan, dan sumber sebelum naskah diizinkan tayang.
 
-STANDAR & ATURAN AUDIT KETAT DENYUTGLOBAL:
+STANDAR & ATURAN AUDIT KEBENARAN FAKTA DENYUTGLOBAL:
 
-1. ATURAN WAJIB PEMERIKSAAN FAKTA UTAMA (1 FAKTA = 1 CLAIM):
+1. FOKUS UTAMA PADA KEBENARAN FAKTA DAN KESESUAIAN DENGAN SUMBER:
+   - Audit harus fokus pada KEBENARAN FAKTA, SUBSTANSI DATA, dan KESESUAIAN DENGAN SUMBER.
+   - JANGAN MENANDAI KLAIM SEBAGAI KESALAHAN/TIDAK DIDUKUNG HANYA KARENA PILIHAN KATA ATAU GAYA JURNALISTIK.
+   - DILARANG menjadikan kata-kata seperti "pasti", "memastikan", "jelas", "penting", "signifikan", "terbukti", "menegaskan", atau kata penegasan sejenis sebagai kesalahan atau pelanggaran fakta secara otomatis.
+   - Periksa konteks kalimat secara menyeluruh dan bandingkan intinya dengan sumber.
+   - CONTOH UTAMA: "BMKG memastikan gempa tersebut tidak berpotensi tsunami." Jika sumber rujukan (misal siaran pers/laporan BMKG) memang menyatakan gempa tidak berpotensi tsunami, klaim tersebut WAJIB dinilai sebagai FAKTA TERVERIFIKASI ("status": "verified", "supported": true). Jangan menandai atau mempermasalahkan kata "memastikan" karena itu bagian dari atribusi resmi.
+
+2. ATURAN WAJIB PEMERIKSAAN FAKTA UTAMA (1 FAKTA = 1 CLAIM):
    - Terdapat ${factsList.length} butir FAKTA UTAMA yang diinput oleh editor.
    - Array "claims" yang Anda hasilkan WAJIB memiliki minimal ${Math.max(factsList.length, 1)} elemen.
    - SETIAP BUTIR FAKTA UTAMA HARUS MENGHASILKAN TEPAT SATU ELEMEN DALAM ARRAY "claims".
@@ -1517,38 +1524,38 @@ STANDAR & ATURAN AUDIT KETAT DENYUTGLOBAL:
    - Setiap claim harus mempertahankan teks dan maksud dari Fakta Utama asal yang bersangkutan.
    - Jika ada klaim tambahan dari isi naskah (lead/tubuh artikel/angka krusial), Anda boleh menambahkannya setelah butir-butir Fakta Utama tersebut.
 
-2. LOGIKA VERIFIKASI SUMBER & DISTINGSI KATEGORI (SANGAT PENTING):
-   Anda WAJIB membedakan 4 kondisi berikut secara tegas dan objektif:
-   a) SUMBER BERHASIL DIAMBIL & ISINYA MENDUKUNG ("status": "verified", "supported": true):
-      - ISI TEKS SUMBER yang disediakan di bawah benar-benar memuat data/fakta/angka yang mendukung klaim secara langsung atau makna setara yang eksplisit.
+3. LOGIKA VERIFIKASI SUMBER & DISTINGSI STATUS (SANGAT PENTING):
+   Anda WAJIB membedakan kondisi berikut secara objektif berdasarkan substansi:
+   a) FAKTA TERVERIFIKASI ("status": "verified", "supported": true):
+      - ISI TEKS SUMBER yang disediakan di bawah atau data acuan editor benar-benar memuat data/fakta/angka yang mendukung inti klaim secara langsung atau makna setara yang eksplisit, meskipun gaya bahasanya tegas.
    b) SUMBER TIDAK DAPAT DIAKSES KARENA KENDALA TEKNIS ("status": "pending_source_verification", "supported": false):
       - Jika URL sumber mengalami HTTP 404, timeout, error koneksi, atau gagal diekstrak:
         * DILARANG menyatakan fakta salah atau bohong.
         * DILARANG memasukkan ke "unsupportedClaims" atau "conflictWarnings" hanya karena kegagalan teknis pengambilan web.
         * Tetapkan "status": "pending_source_verification", "supported": false, "issue": "Sumber tidak dapat diakses secara teknis (HTTP 404/koneksi). Menunggu verifikasi sumber secara manual oleh editor (Bukan bukti fakta salah)".
-   c) SUMBER BERHASIL DIAMBIL TETAPI ISINYA BELUM MEMUAT RINCIAN SPESIFIK ("status": "needs_verification", "supported": false):
-      - Sumber membahas topik serupa tetapi belum memuat angka nominal, persentase, atau rincian spesifik klaim. Tetapkan "status": "needs_verification".
-   d) SUMBER TERBUKTI TIDAK SESUAI / KONTRADIKSI ("status": "needs_verification", "supported": false):
+   c) PERLU VERIFIKASI / SUMBER BELUM MEMUAT RINCIAN LENGKAP ("status": "needs_verification", "supported": false):
+      - Sumber membahas topik serupa tetapi belum memuat rincian angka nominal, persentase, atau rincian spesifik klaim. Tetapkan "status": "needs_verification".
+   d) KLAIM TIDAK DIDUKUNG / KONTRADIKSI NYATA ("status": "needs_verification", "supported": false):
       - Isi sumber BERHASIL diambil dan secara nyata BERTENTANGAN dengan klaim dalam naskah (misal: naskah menyebut 100 korban, sumber resmi menyebut 10 korban).
       - Tandai secara eksplisit di "conflictWarnings" dan "unsupportedClaims".
 
-3. VERIFIKASI DATA ANGKA & ENTITAS SPESIFIK:
-   - Angka, tanggal, persentase, besaran moneter, kapasitas, nominal (contoh: "USD 149,9 miliar", "6,8 bulan impor", "3 bulan standar"), nama lembaga, nama proyek, dan nama tokoh harus diverifikasi ketepatannya secara individual terhadap isi teks sumber.
+4. PEMERIKSAAN SANGAT KETAT ELEMEN FAKTUIL:
+   - Periksa dengan SANGAT KETAT: angka, tanggal, waktu, lokasi, nama orang, nama lembaga, jabatan, jumlah, persentase, nominal mata uang, dan kutipan langsung terhadap sumber rujukan.
 
-4. KESELARASAN JUDUL DENGAN FAKTA (EDITORIAL INTEGRITY):
+5. KESELARASAN JUDUL DENGAN FAKTA (EDITORIAL INTEGRITY):
    - Periksa apakah Judul sesuai dengan fakta utama dalam isi naskah dan sumber rujukan.
-   - Jika judul tidak sesuai, hiperbolis, clickbait, membesar-besarkan fakta, tandai di "unsupportedClaims".
+   - Jika judul terbukti mendistorsi atau bertentangan dengan fakta, tandai di "unsupportedClaims".
 
-5. PANTANGAN TEMPLATE & KATA TERLARANG:
-   - Periksa apakah ada penggunaan kata terlarang tanpa dasar data eksplisit: ["terbukti", "pasti", "terbesar", "bersejarah", "spektakuler", "menghebohkan", "memperkuat", "menjadi bukti"].
-   - Periksa apakah ada kalimat template internal redaksi atau placeholder ("...", "[...]", "[isi]").
+6. PANTANGAN TEMPLATE INTERNAL & PLACEHOLDER:
+   - Periksa apakah ada placeholder yang belum diisi ("...", "[...]", "[isi]", "[nama]", "[tanggal]", "[lokasi]") atau kalimat template internal redaksi.
+   - DILARANG MENGUBAH NASKAH SECARA OTOMATIS SAAT AUDIT.
 
-6. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
+7. SYARAT KELULUSAN KETAT (PASSED / LOLOS VERIFIKASI BERSIH):
    - Status "passed": true HANYA jika:
-     a) Sumber berhasil diambil dan membuktikan SEMUA butir Fakta Utama;
-     b) SEMUA klaim memiliki "supported": true dan "status": "verified";
-     c) Tidak ada konflik fakta, tidak ada unsupportedClaims;
-     d) Tidak ada kata terlarang, kalimat template, atau placeholder.
+     a) Sumber berhasil diambil dan membuktikan butir Fakta Utama;
+     b) SEMUA klaim substantif memiliki "supported": true dan "status": "verified";
+     c) Tidak ada kontradiksi fakta ("conflictWarnings" kosong, "unsupportedClaims" kosong);
+     d) Tidak ada placeholder yang belum diisi.
    - Jika ada sumber yang tidak dapat diakses atau butir fakta belum terbukti, "passed": false, "canPublish": false, "hasUnverifiedClaims": true.
 
 ==================================================
@@ -1886,11 +1893,6 @@ KEMBALIKAN DALAM FORMAT JSON BERIKUT:
       const hasPlaceholders = /\.\.\.|\[\.\.\.\]|\[isi\]|\[nama\]|\[tanggal\]|\[lokasi\]|\[placeholder\]/i.test(fullText);
       
       const foundForbidden: string[] = [];
-      forbiddenWords.forEach(word => {
-        if (fullText.includes(word) && !editorGroundText.includes(word)) {
-          foundForbidden.push(word);
-        }
-      });
 
       // Check numbers in draft that might not be in facts
       const numberRegex = /\b\d+([.,]\d+)?\b/g;
@@ -2232,34 +2234,38 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
   "statusFakta": "string (Status verifikasi, e.g. 'Terverifikasi terhadap rujukan terdaftar')"
 }`;
 
-        const { text: refineOutput } = await generateWithGeminiFallback(client, refinePrompt, 'application/json');
+        try {
+          const { text: refineOutput } = await generateWithGeminiFallback(client, refinePrompt, 'application/json');
 
-        if (refineOutput) {
-          try {
-            const parsed = JSON.parse(refineOutput);
-            return res.json({
-              success: true,
-              source: 'gemini',
-              revisedDraft: {
-                title: parsed.title || title,
-                summary: parsed.summary || summary,
-                facts: Array.isArray(parsed.facts) ? parsed.facts : (facts ? facts.split('\n').filter(Boolean) : []),
-                content: Array.isArray(parsed.content) ? parsed.content : (contentText ? [contentText] : []),
-                whyItMatters: parsed.whyItMatters || whyItMatters,
-                changesSummary: Array.isArray(parsed.changesSummary) && parsed.changesSummary.length > 0
-                  ? parsed.changesSummary
-                  : [
-                      'Naskah diselaraskan dengan instruksi editor',
-                      'Placeholder dan kata klise dibersihkan',
-                      'Fakta utama dipertahankan'
-                    ],
-                conflictWarnings: Array.isArray(parsed.conflictWarnings) ? parsed.conflictWarnings : [],
-                statusFakta: parsed.statusFakta || (validSources.length > 0 ? 'Terverifikasi terhadap sumber terdaftar' : 'Perlu verifikasi sumber')
-              }
-            });
-          } catch (pe) {
-            console.warn('Failed to parse Gemini refine JSON, fallback to algorithmic refiner', pe);
+          if (refineOutput) {
+            try {
+              const parsed = JSON.parse(refineOutput);
+              return res.json({
+                success: true,
+                source: 'gemini',
+                revisedDraft: {
+                  title: parsed.title || title,
+                  summary: parsed.summary || summary,
+                  facts: Array.isArray(parsed.facts) ? parsed.facts : (facts ? facts.split('\n').filter(Boolean) : []),
+                  content: Array.isArray(parsed.content) ? parsed.content : (contentText ? [contentText] : []),
+                  whyItMatters: parsed.whyItMatters || whyItMatters,
+                  changesSummary: Array.isArray(parsed.changesSummary) && parsed.changesSummary.length > 0
+                    ? parsed.changesSummary
+                    : [
+                        'Naskah diselaraskan dengan instruksi editor',
+                        'Placeholder dan kata klise dibersihkan',
+                        'Fakta utama dipertahankan'
+                      ],
+                  conflictWarnings: Array.isArray(parsed.conflictWarnings) ? parsed.conflictWarnings : [],
+                  statusFakta: parsed.statusFakta || (validSources.length > 0 ? 'Terverifikasi terhadap sumber terdaftar' : 'Perlu verifikasi sumber')
+                }
+              });
+            } catch (pe) {
+              console.warn('Failed to parse Gemini refine JSON, fallback to algorithmic refiner', pe);
+            }
           }
+        } catch (geminiErr: any) {
+          console.warn('Gemini refine-draft engine fallback to algorithmic refiner:', geminiErr?.message || geminiErr);
         }
       }
 
