@@ -1108,33 +1108,36 @@ Kembalikan HANYA format JSON valid:
     }
 
     // 17. ROBOTS.TXT
-    if (pathname === '/robots.txt' && method === 'GET') {
+    if (pathname === '/robots.txt' && (method === 'GET' || method === 'HEAD')) {
       const appUrl = env.APP_URL || 'https://denyutglobal.my.id';
       const robots = `User-agent: *\nAllow: /\nDisallow: /redaksi\nDisallow: /editorial\n\nSitemap: ${appUrl}/sitemap.xml\n`;
-      return new Response(robots, {
+      return new Response(method === 'HEAD' ? null : robots, {
+        status: 200,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' }
       });
     }
 
     // 18. SITEMAP.XML (Dinamis dari Cloudflare D1)
-    if (pathname === '/sitemap.xml' && method === 'GET') {
+    if (pathname === '/sitemap.xml' && (method === 'GET' || method === 'HEAD')) {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
       let articles: any[] = [];
 
-      if (env.DB) {
-        const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
-        const res = await executeWorkerD1Query(env.DB, sql);
-        if (res.success && Array.isArray(res.results)) {
-          articles = res.results;
+      if (method === 'GET') {
+        if (env.DB) {
+          const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+          const res = await executeWorkerD1Query(env.DB, sql);
+          if (res.success && Array.isArray(res.results)) {
+            articles = res.results;
+          }
+        } else {
+          // Fallback jika env.DB belum terikat di runtime worker lokal
+          articles = memoryArticlesCache.filter(
+            a => a.status === 'published' && Boolean(a.reviewed)
+          );
         }
-      } else {
-        // Fallback jika env.DB belum terikat di runtime worker lokal
-        articles = memoryArticlesCache.filter(
-          a => a.status === 'published' && Boolean(a.reviewed)
-        );
       }
 
-      const xml = generateSitemapXml(articles, appUrl);
+      const xml = method === 'GET' ? generateSitemapXml(articles, appUrl) : null;
       return new Response(xml, {
         status: 200,
         headers: {
