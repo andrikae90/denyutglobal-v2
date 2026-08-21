@@ -1119,13 +1119,13 @@ Kembalikan HANYA format JSON valid:
     // 18. SITEMAP.XML (Dinamis dari Cloudflare D1)
     if (pathname === '/sitemap.xml' && method === 'GET') {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      let articles: NewsItem[] = [];
+      let articles: any[] = [];
 
       if (env.DB) {
-        const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+        const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
         const res = await executeWorkerD1Query(env.DB, sql);
         if (res.success && Array.isArray(res.results)) {
-          articles = res.results.map(rowToNewsItem);
+          articles = res.results;
         }
       } else {
         // Fallback jika env.DB belum terikat di runtime worker lokal

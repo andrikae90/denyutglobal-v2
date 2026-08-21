@@ -47,9 +47,9 @@ export default function App() {
       const all = editorialStore.getAllArticles();
       const published = all.filter((a) => a.status === 'published' && a.reviewed === true);
 
-      // 1. Direct path check /berita/:slug
+      // 1. Direct path check /berita/:slug or /artikel/:slug
       const pathname = window.location.pathname || '';
-      const match = pathname.match(/^\/berita\/([^/?#]+)/i);
+      const match = pathname.match(/^\/(?:berita|artikel)\/([^/?#]+)/i);
       if (match && match[1]) {
         const slugOrId = decodeURIComponent(match[1]);
         return findPublishedArticleBySlugOrId(published, slugOrId) || null;
@@ -67,12 +67,12 @@ export default function App() {
     return null;
   });
 
-  // 404 slug tracking if /berita/:slug is accessed directly but not found
+  // 404 slug tracking if /berita/:slug or /artikel/:slug is accessed directly but not found
   const [notFoundSlug, setNotFoundSlug] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
       const pathname = window.location.pathname || '';
-      const match = pathname.match(/^\/berita\/([^/?#]+)/i);
+      const match = pathname.match(/^\/(?:berita|artikel)\/([^/?#]+)/i);
       if (match && match[1]) {
         const slugOrId = decodeURIComponent(match[1]);
         const all = editorialStore.getAllArticles();
@@ -348,7 +348,7 @@ export default function App() {
     setNotFoundSlug(null);
     const currentPath = window.location.pathname;
     const hasArticleQuery = window.location.search.includes('article=');
-    if (currentPath.startsWith('/berita') || hasArticleQuery) {
+    if (currentPath.startsWith('/berita') || currentPath.startsWith('/artikel') || hasArticleQuery) {
       window.history.pushState(null, '', '/');
     }
   }, []);
@@ -361,8 +361,8 @@ export default function App() {
         let articleIdentifier: string | null = null;
         let isBeritaPath = false;
 
-        // 1. Check if URL is in /berita/:slug format
-        const beritaMatch = pathname.match(/^\/berita\/([^/?#]+)/i);
+        // 1. Check if URL is in /berita/:slug or /artikel/:slug format
+        const beritaMatch = pathname.match(/^\/(?:berita|artikel)\/([^/?#]+)/i);
         if (beritaMatch && beritaMatch[1]) {
           articleIdentifier = decodeURIComponent(beritaMatch[1]);
           isBeritaPath = true;

@@ -617,12 +617,12 @@ async function startServer() {
   app.get('/sitemap.xml', async (req, res) => {
     try {
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+      const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
       const d1Result = await executeD1Query(sql, [], req);
-      let articles: NewsItem[] = [];
+      let articles: any[] = [];
 
       if (d1Result.success && Array.isArray(d1Result.results) && d1Result.results.length > 0) {
-        articles = d1Result.results.map(rowToNewsItem);
+        articles = d1Result.results;
       } else {
         // Fallback: In-Memory / File Persisted Store
         articles = serverArticles.filter(
