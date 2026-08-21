@@ -471,15 +471,37 @@ function verifyEditorialToken(token: string | undefined): boolean {
   if (!token) return false;
   cleanExpiredSessions();
   const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
-  const exp = activeEditorialSessions.get(cleanToken);
-  if (!exp) {
-    // Also allow master secret from env if configured
-    if (process.env.EDITORIAL_SECRET_KEY && cleanToken === process.env.EDITORIAL_SECRET_KEY) {
-      return true;
-    }
-    return false;
+  if (!cleanToken) return false;
+
+  // 1. Master secret jika diset
+  if (process.env.EDITORIAL_SECRET_KEY && cleanToken === process.env.EDITORIAL_SECRET_KEY) {
+    return true;
   }
-  return exp > Date.now();
+
+  // 2. In-memory session check
+  const exp = activeEditorialSessions.get(cleanToken);
+  if (exp && exp > Date.now()) {
+    return true;
+  }
+
+  // 3. Cryptographic stateless token check
+  if (cleanToken.startsWith('dg_')) {
+    const parts = cleanToken.split('_');
+    if (parts.length === 3) {
+      const expHex = parts[1];
+      const sig = parts[2];
+      const expiresAt = parseInt(expHex, 16);
+      if (!isNaN(expiresAt) && expiresAt > Date.now()) {
+        const expectedSig = crypto.createHash('sha256').update(`${expHex}:${EDITORIAL_PASSPHRASE_SHA256_HASH.toLowerCase()}`).digest('hex');
+        if (sig.toLowerCase() === expectedSig.toLowerCase()) {
+          activeEditorialSessions.set(cleanToken, expiresAt);
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 async function startServer() {
@@ -629,8 +651,10 @@ async function startServer() {
       }
 
       if (inputHash === EDITORIAL_PASSPHRASE_SHA256_HASH.toLowerCase()) {
-        const sessionToken = `dg_${crypto.randomUUID().replace(/-/g, '')}`;
         const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 jam
+        const expHex = expiresAt.toString(16);
+        const sig = crypto.createHash('sha256').update(`${expHex}:${EDITORIAL_PASSPHRASE_SHA256_HASH.toLowerCase()}`).digest('hex');
+        const sessionToken = `dg_${expHex}_${sig}`;
         activeEditorialSessions.set(sessionToken, expiresAt);
 
         return res.json({

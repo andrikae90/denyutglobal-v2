@@ -1,6 +1,7 @@
 import React from 'react';
 import { NewsItem } from '../types';
 import { X, Bookmark, Trash2, ArrowRight, Clock, MapPin } from 'lucide-react';
+import { getValidImageUrl } from '../utils/imageHelper';
 
 interface BookmarksDrawerProps {
   isOpen: boolean;
@@ -66,8 +67,8 @@ export const BookmarksDrawer: React.FC<BookmarksDrawerProps> = ({
                 }}
               >
                 <img
-                  src={article.gambar}
-                  alt={article.judul}
+                  src={getValidImageUrl(article.gambar, article.image)}
+                  alt={article.judul || article.title}
                   referrerPolicy="no-referrer"
                   className="w-20 h-20 rounded-lg object-cover shrink-0"
                 />

@@ -1,6 +1,7 @@
 import React from 'react';
 import { NewsItem } from '../types';
 import { Clock, MapPin, ExternalLink, ArrowRight, Bookmark, Share2, Radio } from 'lucide-react';
+import { getValidImageUrl } from '../utils/imageHelper';
 
 interface HeroNewsProps {
   heroItem: NewsItem;
@@ -57,8 +58,8 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
             onClick={() => onSelectArticle(heroItem)}
           >
             <img
-              src={heroItem.gambar}
-              alt={heroItem.judul}
+              src={getValidImageUrl(heroItem.gambar, heroItem.image)}
+              alt={heroItem.judul || heroItem.title}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
             />

@@ -1,6 +1,7 @@
 import React from 'react';
 import { NewsItem } from '../types';
 import { Clock, MapPin, ExternalLink, Bookmark, ChevronRight, Compass } from 'lucide-react';
+import { getValidImageUrl } from '../utils/imageHelper';
 
 interface IndonesiaSectionProps {
   indonesiaItems: NewsItem[];
@@ -59,8 +60,8 @@ export const IndonesiaSection: React.FC<IndonesiaSectionProps> = ({
                 {/* Thumbnail */}
                 <div className="relative h-48 w-full overflow-hidden bg-slate-100">
                   <img
-                    src={item.gambar}
-                    alt={item.judul}
+                    src={getValidImageUrl(item.gambar, item.image)}
+                    alt={item.judul || item.title}
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
                   />

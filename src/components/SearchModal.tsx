@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { NewsItem } from '../types';
 import { Search, X, Clock, MapPin, ArrowRight } from 'lucide-react';
+import { getValidImageUrl } from '../utils/imageHelper';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -120,8 +121,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 className="py-3 px-2 hover:bg-slate-50 rounded-xl transition cursor-pointer flex gap-3 group"
               >
                 <img
-                  src={item.gambar}
-                  alt={item.judul}
+                  src={getValidImageUrl(item.gambar, item.image)}
+                  alt={item.judul || item.title}
                   referrerPolicy="no-referrer"
                   className="w-16 h-16 rounded-lg object-cover shrink-0"
                 />

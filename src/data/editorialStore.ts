@@ -510,7 +510,7 @@ export class EditorialStore {
    * Simpan artikel (Asinkron API-First dengan fallback sinkron ke LocalStorage)
    */
   public async saveArticleToApi(article: NewsItem, token?: string): Promise<NewsItem> {
-    // 1. Simpan ke local memori & storage terlebih dahulu agar UI responsif & aman offline
+    // 1. Siapkan naskah terformat
     const savedLocal = this.saveArticle(article);
 
     // 2. Simpan ke backend API D1
@@ -521,6 +521,7 @@ export class EditorialStore {
       };
       if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
+        headers['x-editorial-token'] = authToken;
       }
 
       const res = await fetch('/api/editorial/articles', {
@@ -545,19 +546,19 @@ export class EditorialStore {
           }
           return json.data;
         }
+        throw new Error(json.error || json.message || 'Respon server tidak valid saat menyimpan artikel.');
       } else {
         const errJson = await res.json().catch(() => null);
-        const errMsg = errJson?.message || errJson?.error || res.statusText;
-        console.error(`[EditorialStore] Gagal menyimpan artikel ke API (HTTP ${res.status}):`, errMsg);
+        const errMsg = errJson?.error || errJson?.message || `Gagal menyimpan ke database Cloudflare D1 (HTTP ${res.status}: ${res.statusText})`;
         if (res.status === 401) {
-          console.warn('[EditorialStore] Sesi redaksi tidak valid / kedaluwarsa. Token otorisasi diperlukan.');
+          throw new Error('Sesi otorisasi Ruang Redaksi kedaluwarsa atau tidak valid. Silakan login ulang ke Ruang Redaksi.');
         }
+        throw new Error(errMsg);
       }
-    } catch (e) {
-      console.warn('[EditorialStore] API save failed, article kept in offline local storage:', e);
+    } catch (e: any) {
+      console.error('[EditorialStore] Gagal menyimpan artikel ke API/D1:', e);
+      throw e;
     }
-
-    return savedLocal;
   }
 
   /**

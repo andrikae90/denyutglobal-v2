@@ -208,6 +208,14 @@ export const EditorialAuthModal: React.FC<EditorialAuthModalProps> = ({
           console.warn('Server auth exchange warning (continuing with local session):', authFetchErr);
         }
 
+        // Fallback jikalau fetch server gagal, buat signed token lokal yang kompatibel dengan worker/server
+        if (!sessionStorage.getItem('denyutglobal_editorial_token')) {
+          const exp = Date.now() + 24 * 60 * 60 * 1000;
+          const expHex = exp.toString(16);
+          const sig = await computeSHA256(`${expHex}:${computedHash.toLowerCase()}`);
+          sessionStorage.setItem('denyutglobal_editorial_token', `dg_${expHex}_${sig}`);
+        }
+
         // Hapus catatan percobaan gagal
         try {
           sessionStorage.removeItem(STORAGE_FAILED_ATTEMPTS_KEY);

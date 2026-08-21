@@ -21,6 +21,8 @@ import { RadarBeritaView } from './RadarBeritaView';
 import { RadarVerificationModal } from './RadarVerificationModal';
 import { AddPrimaryTopicModal } from './AddPrimaryTopicModal';
 import { ArticleRevisionPanel } from './ArticleRevisionPanel';
+import { ManuscriptImportPanel, FormSnapshot } from './ManuscriptImportPanel';
+import { ParsedManuscript } from '../utils/manuscriptParser';
 import { 
   X, 
   Sparkles, 
@@ -65,8 +67,8 @@ interface EditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   articles: NewsItem[];
-  onSaveArticle: (article: NewsItem) => void;
-  onDeleteArticle?: (id: string) => void;
+  onSaveArticle: (article: NewsItem) => Promise<any> | void;
+  onDeleteArticle?: (id: string) => Promise<any> | void;
   referenceFeeds: NewsItem[];
   onSelectArticlePreview?: (article: NewsItem) => void;
   onLogout?: () => void;
@@ -84,6 +86,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'form' | 'list' | 'wire' | 'factcheck'>('form');
   const [listFilter, setListFilter] = useState<'all' | 'draft' | 'review' | 'approved' | 'published'>('all');
+  const [isSaving, setIsSaving] = useState(false);
   
   // Form State
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -96,6 +99,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const [summary, setSummary] = useState('');
   const [whyItMatters, setWhyItMatters] = useState('');
   const [content, setContent] = useState('');
+  const [customSlug, setCustomSlug] = useState('');
   const [image, setImage] = useState('');
   const [captionGambar, setCaptionGambar] = useState('');
   const [imageType, setImageType] = useState<'ai_illustration' | 'photo' | 'none' | string>('none');
@@ -220,6 +224,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setSummary('');
     setWhyItMatters('');
     setContent('');
+    setCustomSlug('');
     setImage('');
     setCaptionGambar('');
     setImageType('none');
@@ -251,6 +256,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setRoughNotes('');
     setSummary(article.summary || article.ringkasan || '');
     setWhyItMatters(article.whyItMatters || '');
+    setCustomSlug(article.slug || '');
     setContent(
       Array.isArray(article.content || article.isiLengkap) 
         ? (article.content || article.isiLengkap)!.join('\n\n') 
@@ -280,6 +286,51 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setFormError(null);
     setFormSuccess(`Memuat naskah "${article.title || article.judul}" untuk ditinjau.`);
   };
+
+  // Handlers for "Naskah Lengkap → Otomatis Terpecah ke Form Editor"
+  const handleApplyManuscriptSplit = (parsed: ParsedManuscript) => {
+    if (parsed.judul) setTitle(parsed.judul);
+    if (parsed.category) setCategory(parsed.category);
+    if (parsed.lokasi) setLocation(parsed.lokasi);
+    if (parsed.fakta) setFacts(parsed.fakta);
+    if (parsed.ringkasan) setSummary(parsed.ringkasan);
+    if (parsed.konteks) setWhyItMatters(parsed.konteks);
+    if (parsed.isi) setContent(parsed.isi);
+    if (parsed.sourcesList && parsed.sourcesList.length > 0) setSources(parsed.sourcesList);
+    if (parsed.slug) setCustomSlug(parsed.slug);
+    setFormSuccess('Naskah berhasil dipisahkan ke form editor. Silakan periksa atau sesuaikan sebelum melakukan Audit Fakta / Publikasi.');
+    setFormError(null);
+  };
+
+  const handleRestoreFormSnapshot = (snapshot: FormSnapshot) => {
+    setTitle(snapshot.title);
+    setCategory(snapshot.category);
+    setLocation(snapshot.location);
+    setAuthor(snapshot.author);
+    setFacts(snapshot.facts);
+    setSummary(snapshot.summary);
+    setWhyItMatters(snapshot.whyItMatters);
+    setContent(snapshot.content);
+    setSources(snapshot.sources);
+    if (snapshot.customSlug !== undefined) {
+      setCustomSlug(snapshot.customSlug);
+    }
+    setFormSuccess('Form dikembalikan ke kondisi sebelum import.');
+    setFormError(null);
+  };
+
+  const getCurrentFormSnapshot = (): FormSnapshot => ({
+    title,
+    category,
+    location,
+    author,
+    facts,
+    summary,
+    whyItMatters,
+    content,
+    sources: [...sources],
+    customSlug
+  });
 
   const useReferenceAsDraft = async (wireItem: NewsItem) => {
     setIsProcessingWireId(wireItem.id);
@@ -958,7 +1009,7 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     const now = new Date();
     const id = editingId || `art-${Date.now()}`;
     const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
-    const slug = existingArticle?.slug || slugify(title) || id;
+    const slug = (customSlug.trim() ? slugify(customSlug) : '') || existingArticle?.slug || slugify(title) || id;
     const isExistingPublished = !!(existingArticle && (existingArticle.status === 'published' || existingArticle.publishedAt));
 
     const initialTanggal = isExistingPublished && existingArticle?.tanggal 
@@ -1039,20 +1090,31 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
       publishedAt: initialPublishedAt
     };
 
-    onSaveArticle(articleToSave);
+    try {
+      setIsSaving(true);
+      setFormError(null);
+      await onSaveArticle(articleToSave);
 
-    let statusMsg = 'Draft naskah berhasil disimpan.';
-    if (targetStatus === 'review') statusMsg = 'Naskah berhasil dikirim untuk proses Review Editorial redaksi.';
-    if (targetStatus === 'approved') statusMsg = 'Artikel disetujui dan siap dipublikasikan.';
-    if (targetStatus === 'published') statusMsg = 'Artikel resmi DIPUBLIKASIKAN ke portal publik DenyutGlobal!';
+      let statusMsg = 'Draft naskah berhasil disimpan.';
+      if (targetStatus === 'review') statusMsg = 'Naskah berhasil dikirim untuk proses Review Editorial redaksi.';
+      if (targetStatus === 'approved') statusMsg = 'Artikel disetujui dan siap dipublikasikan.';
+      if (targetStatus === 'published') statusMsg = 'Artikel resmi DIPUBLIKASIKAN ke portal publik DenyutGlobal!';
 
-    setFormSuccess(statusMsg);
-    setEditingId(id);
-    setStatus(targetStatus);
+      setFormSuccess(statusMsg);
+      setEditingId(id);
+      setStatus(targetStatus);
+    } catch (err: any) {
+      console.error('Submit article error in EditorModal:', err);
+      const errMsg = err?.message || 'Gagal menyimpan naskah ke database Cloudflare D1.';
+      setFormError(`⚠️ ${errMsg}`);
+      setFormSuccess(null);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Editorial Action 1: Approve Article (Review -> Approved)
-  const handleApproveArticle = (targetArt?: NewsItem) => {
+  const handleApproveArticle = async (targetArt?: NewsItem) => {
     const art = targetArt || (editingId ? articles.find(a => a.id === editingId) : null);
     if (!art && !targetArt && status !== 'review') return;
 
@@ -1066,19 +1128,25 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
         approvedAt: now.toISOString(),
         editorialRevisionNotes: undefined
       };
-      onSaveArticle(updated);
-      if (editingId === targetArt.id) {
-        setStatus('approved');
-        setEditorialRevisionNotes('');
+      try {
+        setIsSaving(true);
+        await onSaveArticle(updated);
+        if (editingId === targetArt.id) {
+          setStatus('approved');
+          setEditorialRevisionNotes('');
+        }
+        setFormSuccess('Artikel disetujui dan siap dipublikasikan.');
+        setFormError(null);
+      } catch (err: any) {
+        setFormError(`⚠️ Gagal menyetujui artikel di database: ${err?.message || 'Terjadi kesalahan'}`);
+      } finally {
+        setIsSaving(false);
       }
     } else {
       // Approve current working form
-      handleSubmit('approved');
+      await handleSubmit('approved');
       return;
     }
-
-    setFormSuccess('Artikel disetujui dan siap dipublikasikan.');
-    setFormError(null);
   };
 
   // Editorial Action 2: Request Revision / Needs Fixes (Review -> Draft with Notes)
@@ -1093,42 +1161,49 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     setIsRevisionModalOpen(true);
   };
 
-  const handleConfirmRevision = () => {
+  const handleConfirmRevision = async () => {
     const note = revisionNoteInput.trim() || 'Perlu perbaikan redaksional dan verifikasi lanjutan.';
 
-    if (revisionTargetArticle) {
-      const updated: NewsItem = {
-        ...revisionTargetArticle,
-        status: 'draft',
-        reviewed: false,
-        editorialRevisionNotes: note
-      };
-      onSaveArticle(updated);
-      if (editingId === revisionTargetArticle.id) {
-        setStatus('draft');
-        setEditorialRevisionNotes(note);
-      }
-    } else {
-      // In active form
-      setEditorialRevisionNotes(note);
-      setStatus('draft');
-
-      const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
-      if (existingArticle) {
+    try {
+      setIsSaving(true);
+      if (revisionTargetArticle) {
         const updated: NewsItem = {
-          ...existingArticle,
+          ...revisionTargetArticle,
           status: 'draft',
           reviewed: false,
           editorialRevisionNotes: note
         };
-        onSaveArticle(updated);
-      }
-    }
+        await onSaveArticle(updated);
+        if (editingId === revisionTargetArticle.id) {
+          setStatus('draft');
+          setEditorialRevisionNotes(note);
+        }
+      } else {
+        // In active form
+        setEditorialRevisionNotes(note);
+        setStatus('draft');
 
-    setIsRevisionModalOpen(false);
-    setRevisionTargetArticle(null);
-    setFormSuccess(`Artikel dikembalikan ke status Draft dengan catatan perbaikan redaksi: "${note}"`);
-    setFormError(null);
+        const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
+        if (existingArticle) {
+          const updated: NewsItem = {
+            ...existingArticle,
+            status: 'draft',
+            reviewed: false,
+            editorialRevisionNotes: note
+          };
+          await onSaveArticle(updated);
+        }
+      }
+
+      setIsRevisionModalOpen(false);
+      setRevisionTargetArticle(null);
+      setFormSuccess(`Artikel dikembalikan ke status Draft dengan catatan perbaikan redaksi: "${note}"`);
+      setFormError(null);
+    } catch (err: any) {
+      setFormError(`⚠️ Gagal menyimpan revisi: ${err?.message || 'Terjadi kesalahan'}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Editorial Action 3: Revert Review to Draft (Review -> Draft without notes)
@@ -1143,38 +1218,45 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     setIsRevertConfirmOpen(true);
   };
 
-  const handleConfirmRevert = () => {
-    if (revertTargetArticle) {
-      const reverted: NewsItem = {
-        ...revertTargetArticle,
-        status: 'draft',
-        reviewed: false,
-        publishedAt: undefined
-      };
-      onSaveArticle(reverted);
-
-      if (editingId === revertTargetArticle.id) {
-        setStatus('draft');
-      }
-    } else {
-      // Current form
-      setStatus('draft');
-      const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
-      if (existingArticle) {
-        const updated: NewsItem = {
-          ...existingArticle,
+  const handleConfirmRevert = async () => {
+    try {
+      setIsSaving(true);
+      if (revertTargetArticle) {
+        const reverted: NewsItem = {
+          ...revertTargetArticle,
           status: 'draft',
           reviewed: false,
           publishedAt: undefined
         };
-        onSaveArticle(updated);
-      }
-    }
+        await onSaveArticle(reverted);
 
-    setIsRevertConfirmOpen(false);
-    setRevertTargetArticle(null);
-    setFormError(null);
-    setFormSuccess('Artikel berhasil dikembalikan ke Draft.');
+        if (editingId === revertTargetArticle.id) {
+          setStatus('draft');
+        }
+      } else {
+        // Current form
+        setStatus('draft');
+        const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
+        if (existingArticle) {
+          const updated: NewsItem = {
+            ...existingArticle,
+            status: 'draft',
+            reviewed: false,
+            publishedAt: undefined
+          };
+          await onSaveArticle(updated);
+        }
+      }
+
+      setIsRevertConfirmOpen(false);
+      setRevertTargetArticle(null);
+      setFormError(null);
+      setFormSuccess('Artikel berhasil dikembalikan ke Draft.');
+    } catch (err: any) {
+      setFormError(`⚠️ Gagal mengembalikan ke draft: ${err?.message || 'Terjadi kesalahan'}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const filteredArticles = articles.filter(a => {
@@ -1410,10 +1492,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                     <button
                       type="button"
                       onClick={() => handleSubmit('published')}
-                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Publikasikan Sekarang</span>
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      <span>{isSaving ? 'Mempublikasikan ke D1...' : 'Publikasikan Sekarang'}</span>
                     </button>
                   </div>
                 </div>
@@ -1501,6 +1584,13 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                   </div>
                 </div>
               )}
+
+              {/* Smart Auto-Splitter Panel for Complete Manuscript */}
+              <ManuscriptImportPanel
+                onApplyToForm={handleApplyManuscriptSplit}
+                onRestoreFormSnapshot={handleRestoreFormSnapshot}
+                getCurrentFormSnapshot={getCurrentFormSnapshot}
+              />
 
               {/* Status Header Bar */}
               <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
@@ -1779,11 +1869,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                 )}
 
                 {/* Active Image Preview or Empty State */}
-                {image ? (
+                {image && image.trim().length > 0 ? (
                   <div className="space-y-4">
                     <div className="relative rounded-xl overflow-hidden border border-slate-300 bg-slate-950 group aspect-video max-h-[360px] flex items-center justify-center">
                       <img
-                        src={image}
+                        src={image.trim()}
                         alt={captionGambar || title || 'Gambar Artikel'}
                         className="w-full h-full object-cover object-center"
                         referrerPolicy="no-referrer"
@@ -2150,19 +2240,21 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       <button
                         type="button"
                         onClick={() => handleSubmit('draft')}
-                        className="px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Save className="w-3.5 h-3.5 text-slate-600" />
-                        <span>Simpan Draft</span>
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-600" /> : <Save className="w-3.5 h-3.5 text-slate-600" />}
+                        <span>{isSaving ? 'Menyimpan...' : 'Simpan Draft'}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleSubmit('review')}
-                        className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Kirim untuk Review</span>
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        <span>{isSaving ? 'Mengirim...' : 'Kirim untuk Review'}</span>
                       </button>
                     </>
                   )}
@@ -2174,7 +2266,8 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                         id="editor-form-revert-draft-btn"
                         type="button"
                         onClick={() => handleRequestRevert()}
-                        className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Kembalikan artikel ini ke status Draft"
                       >
                         <Undo2 className="w-3.5 h-3.5 text-amber-700" />
@@ -2184,7 +2277,8 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       <button
                         type="button"
                         onClick={() => handleOpenRevisionModal()}
-                        className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <BadgeAlert className="w-3.5 h-3.5" />
                         <span>⚠️ Perlu Perbaikan</span>
@@ -2193,10 +2287,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       <button
                         type="button"
                         onClick={() => handleApproveArticle()}
-                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>✅ Setujui & Siap Publikasi</span>
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                        <span>{isSaving ? 'Menyetujui...' : '✅ Setujui & Siap Publikasi'}</span>
                       </button>
                     </>
                   )}
@@ -2207,7 +2302,8 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       <button
                         type="button"
                         onClick={() => handleRequestRevert()}
-                        className="px-3.5 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                        disabled={isSaving}
+                        className="px-3.5 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         ↩️ Kembalikan ke Draft
                       </button>
@@ -2215,10 +2311,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       <button
                         type="button"
                         onClick={() => handleSubmit('approved')}
-                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                        disabled={isSaving}
+                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Save className="w-3.5 h-3.5 text-slate-300" />
-                        <span>Simpan Perubahan</span>
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-300" /> : <Save className="w-3.5 h-3.5 text-slate-300" />}
+                        <span>{isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}</span>
                       </button>
                     </>
                   )}
@@ -2228,10 +2325,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                     <button
                       type="button"
                       onClick={() => handleSubmit('published')}
-                      className="px-4 py-2.5 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                      disabled={isSaving}
+                      className="px-4 py-2.5 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Save className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Simpan Pembaruan / Koreksi</span>
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" /> : <Save className="w-3.5 h-3.5 text-emerald-400" />}
+                      <span>{isSaving ? 'Menyimpan...' : 'Simpan Pembaruan / Koreksi'}</span>
                     </button>
                   )}
 
@@ -2241,15 +2339,15 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       id="editor-btn-publish-article"
                       type="button"
                       onClick={() => handleSubmit('published')}
-                      disabled={status !== 'approved'}
+                      disabled={status !== 'approved' || isSaving}
                       className={`px-5 py-2.5 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-md ${
-                        status === 'approved'
+                        status === 'approved' && !isSaving
                           ? 'bg-rose-600 hover:bg-rose-700 cursor-pointer animate-pulse-subtle'
                           : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
                       }`}
                     >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Publikasikan Artikel</span>
+                      {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                      <span>{isSaving ? 'Mempublikasikan ke D1...' : 'Publikasikan Artikel'}</span>
                     </button>
 
                     {status !== 'approved' && (
@@ -2469,10 +2567,10 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
                       </div>
                     </div>
 
-                    {image && (
+                    {image && image.trim().length > 0 && (
                       <div className="flex items-center gap-3 pt-1">
                         <img
-                          src={image}
+                          src={image.trim()}
                           alt="Thumbnail Ilustrasi"
                           className="w-16 h-12 object-cover rounded-lg border border-slate-200"
                         />

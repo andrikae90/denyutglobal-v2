@@ -166,17 +166,23 @@ export default function App() {
 
   // Handle saving an editorial article (API-first with localStorage fallback)
   const handleSaveEditorialArticle = async (articleToSave: NewsItem) => {
-    // 1. Instant local update
-    const saved = await editorialStore.saveArticleToApi(articleToSave);
-    const updatedAll = editorialStore.getAllArticles();
-    setAllEditorialArticles(updatedAll);
-    
-    if (articleToSave.status === 'published') {
-      showToast('Artikel berhasil disimpan dan dipublikasikan ke portal');
-    } else if (articleToSave.status === 'review') {
-      showToast('Artikel dikirim untuk review redaksi');
-    } else {
-      showToast('Draft naskah artikel berhasil disimpan');
+    try {
+      const saved = await editorialStore.saveArticleToApi(articleToSave);
+      const updatedAll = editorialStore.getAllArticles();
+      setAllEditorialArticles(updatedAll);
+      
+      if (articleToSave.status === 'published') {
+        showToast('Artikel berhasil disimpan dan dipublikasikan ke portal');
+      } else if (articleToSave.status === 'review') {
+        showToast('Artikel dikirim untuk review redaksi');
+      } else {
+        showToast('Draft naskah artikel berhasil disimpan');
+      }
+      return saved;
+    } catch (err: any) {
+      console.error('Failed to save editorial article to backend/D1:', err);
+      showToast(`⚠️ ${err?.message || 'Gagal menyimpan naskah ke database Cloudflare D1'}`);
+      throw err;
     }
   };
 

@@ -333,26 +333,50 @@ function cleanExpiredSessions() {
   }
 }
 
-function verifyEditorialToken(token: string | null | undefined, env: Env): boolean {
-  if (!token) return false;
-  cleanExpiredSessions();
-  const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
-  const exp = activeEditorialSessions.get(cleanToken);
-  if (!exp) {
-    if (env.EDITORIAL_SECRET_KEY && cleanToken === env.EDITORIAL_SECRET_KEY) {
-      return true;
-    }
-    return false;
-  }
-  return exp > Date.now();
-}
-
 async function sha256Hex(str: string): Promise<string> {
   const buf = new TextEncoder().encode(str);
   const digest = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(digest))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+async function verifyWorkerEditorialToken(token: string | null | undefined, env: Env): Promise<boolean> {
+  if (!token) return false;
+  cleanExpiredSessions();
+  const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+  if (!cleanToken) return false;
+
+  // 1. Cek explicit secret key dari Cloudflare Environment jika diset
+  if (env.EDITORIAL_SECRET_KEY && cleanToken === env.EDITORIAL_SECRET_KEY) {
+    return true;
+  }
+
+  // 2. Cek in-memory session (jika berada di isolate yang sama)
+  const exp = activeEditorialSessions.get(cleanToken);
+  if (exp && exp > Date.now()) {
+    return true;
+  }
+
+  // 3. Cryptographic stateless token verification (menjamin valid di SEMUA Worker isolate edge multi-region)
+  if (cleanToken.startsWith('dg_')) {
+    const parts = cleanToken.split('_');
+    if (parts.length === 3) {
+      const expHex = parts[1];
+      const sig = parts[2];
+      const expiresAt = parseInt(expHex, 16);
+      if (!isNaN(expiresAt) && expiresAt > Date.now()) {
+        const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || DEFAULT_EDITORIAL_HASH).toLowerCase();
+        const expectedSig = await sha256Hex(`${expHex}:${targetHash}`);
+        if (sig.toLowerCase() === expectedSig.toLowerCase()) {
+          activeEditorialSessions.set(cleanToken, expiresAt);
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 function jsonResponse(data: any, status = 200, headers: Record<string, string> = {}): Response {
@@ -550,8 +574,10 @@ export default {
         }
 
         if (inputHash === targetHash) {
-          const sessionToken = `dg_${crypto.randomUUID().replace(/-/g, '')}`;
           const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+          const expHex = expiresAt.toString(16);
+          const sig = await sha256Hex(`${expHex}:${targetHash}`);
+          const sessionToken = `dg_${expHex}_${sig}`;
           activeEditorialSessions.set(sessionToken, expiresAt);
 
           return jsonResponse({
@@ -574,7 +600,7 @@ export default {
     // 7. EDITORIAL SESSION VERIFY (GET /api/editorial/session)
     if (pathname === '/api/editorial/session' && method === 'GET') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      const isValid = verifyEditorialToken(authHeader, env);
+      const isValid = await verifyWorkerEditorialToken(authHeader, env);
       if (isValid) {
         return jsonResponse({ success: true, valid: true, message: 'Sesi redaksi aktif.' });
       }
@@ -584,7 +610,7 @@ export default {
     // 8. EDITORIAL ARTICLES (GET /api/editorial/articles)
     if (pathname === '/api/editorial/articles' && method === 'GET') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      if (!verifyEditorialToken(authHeader, env)) {
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak. Sesi tidak valid.' }, 401);
       }
 
@@ -613,8 +639,8 @@ export default {
     // 9. EDITORIAL ARTICLE SAVE / INSERT (POST /api/editorial/articles)
     if (pathname === '/api/editorial/articles' && method === 'POST') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      if (!verifyEditorialToken(authHeader, env)) {
-        return jsonResponse({ success: false, error: 'Akses ditolak. Sesi tidak valid.' }, 401);
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
+        return jsonResponse({ success: false, error: 'Akses ditolak. Sesi otorisasi redaksi tidak valid atau kedaluwarsa.' }, 401);
       }
 
       try {
@@ -673,7 +699,7 @@ export default {
     // 10. EDITORIAL ARTICLE UPDATE (PUT /api/editorial/articles/:id)
     if (pathname.startsWith('/api/editorial/articles/') && method === 'PUT') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      if (!verifyEditorialToken(authHeader, env)) {
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
       }
 
@@ -724,7 +750,7 @@ export default {
     // 11. EDITORIAL ARTICLE DELETE (DELETE /api/editorial/articles/:id)
     if (pathname.startsWith('/api/editorial/articles/') && method === 'DELETE') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      if (!verifyEditorialToken(authHeader, env)) {
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
       }
 
@@ -745,7 +771,7 @@ export default {
     // 12. EDITORIAL SYNC BATCH (POST /api/editorial/sync-batch)
     if (pathname === '/api/editorial/sync-batch' && method === 'POST') {
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
-      if (!verifyEditorialToken(authHeader, env)) {
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
       }
 
