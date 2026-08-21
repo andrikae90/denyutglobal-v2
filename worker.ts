@@ -1,6 +1,7 @@
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
+import { generateSitemapXml } from './src/utils/sitemap';
 
 export interface WorkerD1PreparedStatement {
   bind(...values: any[]): WorkerD1PreparedStatement;
@@ -1115,24 +1116,31 @@ Kembalikan HANYA format JSON valid:
       });
     }
 
-    // 18. SITEMAP.XML
+    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1)
     if (pathname === '/sitemap.xml' && method === 'GET') {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>${appUrl}/</loc>
-    <changefreq>hourly</changefreq>
-    <priority>1.0</priority>
-  </url>
-  <url>
-    <loc>${appUrl}/pedoman-editor</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>
-</urlset>`;
+      let articles: NewsItem[] = [];
+
+      if (env.DB) {
+        const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+        const res = await executeWorkerD1Query(env.DB, sql);
+        if (res.success && Array.isArray(res.results)) {
+          articles = res.results.map(rowToNewsItem);
+        }
+      } else {
+        // Fallback jika env.DB belum terikat di runtime worker lokal
+        articles = memoryArticlesCache.filter(
+          a => a.status === 'published' && Boolean(a.reviewed)
+        );
+      }
+
+      const xml = generateSitemapXml(articles, appUrl);
       return new Response(xml, {
-        headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+        status: 200,
+        headers: {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600, s-maxage=3600'
+        }
       });
     }
 

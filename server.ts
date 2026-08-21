@@ -8,6 +8,7 @@ import { GoogleGenAI } from '@google/genai';
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
+import { generateSitemapXml } from './src/utils/sitemap';
 
 // =====================================================================
 // DENYUTGLOBAL V2 - SERVER ARTICLE PERSISTENCE ADAPTER (D1 / SQL COMPATIBLE)
@@ -612,21 +613,33 @@ async function startServer() {
     res.send(`User-agent: *\nAllow: /\nDisallow: /redaksi\nDisallow: /editorial\n\nSitemap: ${domain}/sitemap.xml\n`);
   });
 
-  // Sitemap.xml
-  app.get('/sitemap.xml', (req, res) => {
+  // Sitemap.xml (Dinamis dari Cloudflare D1 / Server Persistence)
+  app.get('/sitemap.xml', async (req, res) => {
     try {
-      const publicSitemap = path.join(process.cwd(), 'public', 'sitemap.xml');
-      const distSitemap = path.join(process.cwd(), 'dist', 'sitemap.xml');
-      const sitemapPath = fs.existsSync(publicSitemap) ? publicSitemap : distSitemap;
-      if (fs.existsSync(sitemapPath)) {
-        const content = fs.readFileSync(sitemapPath, 'utf-8');
-        res.type('application/xml');
-        return res.send(content);
+      const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+      const d1Result = await executeD1Query(sql, [], req);
+      let articles: NewsItem[] = [];
+
+      if (d1Result.success && Array.isArray(d1Result.results) && d1Result.results.length > 0) {
+        articles = d1Result.results.map(rowToNewsItem);
+      } else {
+        // Fallback: In-Memory / File Persisted Store
+        articles = serverArticles.filter(
+          (a) => a.status === 'published' && Boolean(a.reviewed)
+        );
       }
+
+      const xml = generateSitemapXml(articles, domain);
+      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+      return res.status(200).send(xml);
     } catch (e) {
-      console.warn('Error reading sitemap.xml:', e);
+      console.warn('Error generating sitemap.xml:', e);
+      const fallbackXml = generateSitemapXml([], 'https://denyutglobal.my.id');
+      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      return res.status(200).send(fallbackXml);
     }
-    res.status(404).send('Sitemap not found');
   });
 
   // =====================================================================
