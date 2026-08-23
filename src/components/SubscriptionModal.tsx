@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   Send
 } from 'lucide-react';
+import { subscribeNewsletter, validateEmail } from '../services/subscriptionService';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -26,24 +27,18 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
   if (!isOpen) return null;
 
-  const validateEmail = (input: string): boolean => {
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    return emailRegex.test(input.trim());
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
     const trimmedEmail = email.trim();
 
-    // 1. Validasi kosong
+    // 1. Validasi awal di sisi klien
     if (!trimmedEmail) {
       setErrorMessage('Silakan masukkan alamat email Anda.');
       return;
     }
 
-    // 2. Validasi format
     if (!validateEmail(trimmedEmail)) {
       setErrorMessage('Masukkan alamat email yang valid.');
       return;
@@ -51,40 +46,14 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
     setStatus('loading');
 
-    // Simulate saving to storage with resilient error handling
-    try {
-      setTimeout(() => {
-        try {
-          const existingRaw = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
-            ? localStorage.getItem('denyutglobal_subscribers')
-            : null;
-          const existingList: { email: string; subscribedAt: string }[] = existingRaw 
-            ? JSON.parse(existingRaw) 
-            : [];
+    // 2. Kirim permintaan langganan ke API backend / D1
+    const result = await subscribeNewsletter(trimmedEmail);
 
-          // Save new subscriber if not already present
-          const alreadySubscribed = existingList.some(item => item.email.toLowerCase() === trimmedEmail.toLowerCase());
-          if (!alreadySubscribed) {
-            existingList.push({
-              email: trimmedEmail,
-              subscribedAt: new Date().toISOString()
-            });
-            if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-              localStorage.setItem('denyutglobal_subscribers', JSON.stringify(existingList));
-            }
-          }
-
-          setStatus('success');
-        } catch (storageErr) {
-          console.error('Storage error during subscription registration:', storageErr);
-          setStatus('error');
-          setErrorMessage('Pendaftaran belum berhasil. Silakan coba lagi.');
-        }
-      }, 450);
-    } catch (err) {
-      console.error('Submission error:', err);
+    if (result.success) {
+      setStatus('success');
+    } else {
       setStatus('error');
-      setErrorMessage('Pendaftaran belum berhasil. Silakan coba lagi.');
+      setErrorMessage(result.error || 'Pendaftaran belum berhasil. Silakan coba lagi.');
     }
   };
 

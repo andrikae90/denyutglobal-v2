@@ -557,6 +557,61 @@ export default {
       }, 404);
     }
 
+    // 5.5 SUBSCRIBE NEWSLETTER (POST /api/subscribe)
+    if (pathname === '/api/subscribe' && method === 'POST') {
+      try {
+        const body: any = await request.json().catch(() => ({}));
+        const rawEmail = typeof body?.email === 'string' ? body.email : '';
+        const normalizedEmail = rawEmail.trim().toLowerCase();
+
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!normalizedEmail || normalizedEmail.length < 5 || normalizedEmail.length > 254 || !emailRegex.test(normalizedEmail)) {
+          return jsonResponse({
+            success: false,
+            error: 'Format alamat email tidak valid.'
+          }, 400);
+        }
+
+        const id = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const nowIso = new Date().toISOString();
+
+        if (env.DB) {
+          // Pastikan tabel subscribers ada
+          await executeWorkerD1Query(
+            env.DB,
+            `CREATE TABLE IF NOT EXISTS subscribers (
+              id TEXT PRIMARY KEY,
+              email TEXT NOT NULL UNIQUE,
+              subscribed_at TEXT NOT NULL,
+              created_at TEXT DEFAULT (datetime('now'))
+            );`
+          );
+
+          // Insert aman dengan prepared statement & on conflict do nothing
+          const insertRes = await executeWorkerD1Query(
+            env.DB,
+            `INSERT INTO subscribers (id, email, subscribed_at) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
+            [id, normalizedEmail, nowIso]
+          );
+
+          if (!insertRes.success) {
+            console.error('Worker D1 subscribe insert error:', insertRes.error);
+          }
+        }
+
+        return jsonResponse({
+          success: true,
+          message: 'Terima kasih! Anda telah berhasil berlangganan Daily Brief DenyutGlobal.'
+        });
+      } catch (err: any) {
+        console.error('Worker subscribe error:', err);
+        return jsonResponse({
+          success: false,
+          error: 'Terjadi gangguan saat memproses pendaftaran.'
+        }, 500);
+      }
+    }
+
     // 6. EDITORIAL AUTH (POST /api/editorial/auth)
     if (pathname === '/api/editorial/auth' && method === 'POST') {
       try {

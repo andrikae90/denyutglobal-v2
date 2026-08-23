@@ -730,6 +730,60 @@ async function startServer() {
   });
 
   // =====================================================================
+  // 1C. ENDPOINT LANGGANAN NEWSLETTER (POST /api/subscribe)
+  // =====================================================================
+  app.post('/api/subscribe', async (req, res) => {
+    try {
+      const rawEmail = typeof req.body?.email === 'string' ? req.body.email : '';
+      const normalizedEmail = rawEmail.trim().toLowerCase();
+
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!normalizedEmail || normalizedEmail.length < 5 || normalizedEmail.length > 254 || !emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format alamat email tidak valid.'
+        });
+      }
+
+      const id = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const nowIso = new Date().toISOString();
+
+      // Pastikan tabel ada di D1 (jika terkoneksi D1)
+      try {
+        await executeD1Query(
+          `CREATE TABLE IF NOT EXISTS subscribers (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            subscribed_at TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+          );`,
+          [],
+          req
+        );
+
+        await executeD1Query(
+          `INSERT INTO subscribers (id, email, subscribed_at) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
+          [id, normalizedEmail, nowIso],
+          req
+        );
+      } catch (d1Err) {
+        console.warn('D1 subscribe save warning (proceeding with confirmation):', d1Err);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Terima kasih! Anda telah berhasil berlangganan Daily Brief DenyutGlobal.'
+      });
+    } catch (err: any) {
+      console.error('Server subscribe error:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Terjadi gangguan saat memproses pendaftaran.'
+      });
+    }
+  });
+
+  // =====================================================================
   // 2. ENDPOINT PUBLIK ARTIKEL (HANYA STATUS 'PUBLISHED' & REVIEWED = TRUE)
   // =====================================================================
   // GET /api/articles - Mengambil daftar artikel terpublikasi dari D1 / Cache

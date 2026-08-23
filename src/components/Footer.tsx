@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   RefreshCw
 } from 'lucide-react';
+import { subscribeNewsletter, validateEmail } from '../services/subscriptionService';
 
 interface FooterProps {
   onSelectCategory: (category: CategoryId) => void;
@@ -31,12 +32,7 @@ export const Footer: React.FC<FooterProps> = ({
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const validateEmail = (input: string): boolean => {
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    return emailRegex.test(input.trim());
-  };
-
-  const handleSubscribe = (e: React.FormEvent) => {
+  const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     const trimmed = email.trim();
@@ -52,37 +48,19 @@ export const Footer: React.FC<FooterProps> = ({
     }
 
     setStatus('loading');
-    setTimeout(() => {
-      try {
-        const existingRaw = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
-          ? localStorage.getItem('denyutglobal_subscribers')
-          : null;
-        const existingList: { email: string; subscribedAt: string }[] = existingRaw 
-          ? JSON.parse(existingRaw) 
-          : [];
 
-        const alreadySubscribed = existingList.some(item => item.email.toLowerCase() === trimmed.toLowerCase());
-        if (!alreadySubscribed) {
-          existingList.push({
-            email: trimmed,
-            subscribedAt: new Date().toISOString()
-          });
-          if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-            localStorage.setItem('denyutglobal_subscribers', JSON.stringify(existingList));
-          }
-        }
+    const result = await subscribeNewsletter(trimmed);
 
-        setStatus('success');
-        setTimeout(() => {
-          setEmail('');
-          setStatus('idle');
-        }, 5000);
-      } catch (err) {
-        console.error('Footer subscription save error:', err);
-        setStatus('error');
-        setErrorMsg('Pendaftaran belum berhasil. Silakan coba lagi.');
-      }
-    }, 350);
+    if (result.success) {
+      setStatus('success');
+      setTimeout(() => {
+        setEmail('');
+        setStatus('idle');
+      }, 5000);
+    } else {
+      setStatus('error');
+      setErrorMsg(result.error || 'Pendaftaran belum berhasil. Silakan coba lagi.');
+    }
   };
 
   return (

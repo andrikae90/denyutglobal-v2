@@ -598,8 +598,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       const rawDataUrl = event.target?.result as string;
       const img = new Image();
       img.onload = () => {
-        // High-quality canvas compression to max 1600px for optimal speed & storage
-        const maxDim = 1600;
+        // High-quality canvas compression to max 1200px for optimal speed & storage
+        const maxDim = 1200;
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -617,7 +617,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(img, 0, 0, w, h);
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.80);
           setImage(compressedDataUrl);
         } else {
           setImage(rawDataUrl);

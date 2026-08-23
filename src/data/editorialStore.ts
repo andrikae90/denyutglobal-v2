@@ -339,6 +339,26 @@ export class EditorialStore {
   }
 
   /**
+   * Helper untuk membersihkan data URL berukuran besar sebelum disimpan ke offline cache localStorage
+   */
+  private sanitizeForStorage(items: NewsItem[]): NewsItem[] {
+    return items.map((item) => {
+      const isImageDataUrl = typeof item.image === 'string' && item.image.startsWith('data:');
+      const isGambarDataUrl = typeof item.gambar === 'string' && item.gambar.startsWith('data:');
+
+      // Jika gambar bertipe data URL (base64) dan sangat panjang (> 20KB), jangan simpan string base64 penuh ke localStorage
+      if (isImageDataUrl || isGambarDataUrl) {
+        return {
+          ...item,
+          image: isImageDataUrl && item.image && item.image.length > 20000 ? '' : item.image,
+          gambar: isGambarDataUrl && item.gambar && item.gambar.length > 20000 ? '' : item.gambar,
+        };
+      }
+      return item;
+    });
+  }
+
+  /**
    * Membaca artikel dari localStorage (cache / fallback offline)
    */
   public loadFromStorage(): NewsItem[] {
@@ -357,19 +377,61 @@ export class EditorialStore {
       }
     }
     this.articles = [...INITIAL_EDITORIAL_ARTICLES];
-    this.saveToStorage();
     return this.articles;
   }
 
   /**
-   * Menyimpan salinan ke localStorage sebagai offline cache
+   * Menyimpan salinan ke localStorage sebagai offline cache secara aman & tahan kuota
    */
   public saveToStorage() {
-    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+      return;
+    }
+
+    try {
+      // 1. Sanitasi gambar data URL besar sebelum disimpan ke localStorage
+      const sanitized = this.sanitizeForStorage(this.articles);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+    } catch (e: any) {
+      console.warn('[EditorialStore] Kuota localStorage penuh, menerapkan kompresi cache offline:', e?.message || e);
+      
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.articles));
-      } catch (e) {
-        console.error('Failed to save editorial articles to localStorage', e);
+        // 2. Bersihkan cache sementara untuk menghemat ruang
+        try {
+          localStorage.removeItem('denyutglobal_news_summary_cache_v1');
+          localStorage.removeItem('denyutglobal_editorial_articles');
+          localStorage.removeItem('denyutglobal_editorial_articles_v1');
+        } catch {}
+
+        // 3. Simpan hanya 15 artikel terbaru dengan struktur ramping
+        const leanArticles = this.articles.slice(0, 15).map((art) => ({
+          id: art.id,
+          slug: art.slug,
+          title: art.title || art.judul,
+          judul: art.judul || art.title,
+          summary: art.summary || art.ringkasan,
+          ringkasan: art.ringkasan || art.summary,
+          category: art.category || art.kategori,
+          kategori: art.kategori || art.category,
+          categoryLabel: art.categoryLabel || art.kategoriLabel,
+          kategoriLabel: art.kategoriLabel || art.categoryLabel,
+          publishedAt: art.publishedAt,
+          tanggal: art.tanggal,
+          waktu: art.waktu,
+          status: art.status,
+          reviewed: art.reviewed,
+          isEditorial: art.isEditorial,
+          image: typeof art.image === 'string' && !art.image.startsWith('data:') ? art.image : '',
+          gambar: typeof art.gambar === 'string' && !art.gambar.startsWith('data:') ? art.gambar : '',
+          content: art.content || art.isiLengkap,
+          isiLengkap: art.isiLengkap || art.content,
+          sources: art.sources,
+          tags: art.tags
+        }));
+
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(leanArticles));
+      } catch (fallbackErr) {
+        console.warn('[EditorialStore] Melewati penyimpanan offline localStorage (mode in-memory aktif).', fallbackErr);
       }
     }
   }
