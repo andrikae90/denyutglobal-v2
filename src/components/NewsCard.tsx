@@ -64,9 +64,6 @@ export const NewsCard: React.FC<NewsCardProps> = ({
                   {article.tanggal} ({article.waktu})
                 </span>
               </div>
-              <span className="font-semibold text-slate-700 hidden md:inline">
-                Sumber: {article.namaSumber}
-              </span>
             </div>
 
             <h3 className="text-base sm:text-lg font-bold text-slate-900 group-hover:text-rose-600 transition-colors font-serif-headline leading-snug mb-1.5">
@@ -79,8 +76,8 @@ export const NewsCard: React.FC<NewsCardProps> = ({
           </div>
 
           <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-            <span className="text-slate-500 text-[11px]">
-              Sumber: <strong className="text-slate-700">{article.namaSumber}</strong>
+            <span className="text-slate-400 text-[11px]">
+              {article.readTimeMinutes ? `${article.readTimeMinutes} menit baca` : '3 menit baca'}
             </span>
 
             <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -170,8 +167,12 @@ export const NewsCard: React.FC<NewsCardProps> = ({
           <div className="flex items-center gap-2 text-[11px] text-slate-500 mb-2">
             <Clock className="w-3 h-3 text-slate-400" />
             <span>{article.tanggal}</span>
-            <span>•</span>
-            <span className="font-semibold text-slate-700">{article.namaSumber}</span>
+            {article.waktu && (
+              <>
+                <span>•</span>
+                <span>{article.waktu}</span>
+              </>
+            )}
           </div>
 
           <h3 className="text-base font-bold text-slate-900 group-hover:text-rose-600 transition-colors font-serif-headline leading-snug mb-2 line-clamp-2">

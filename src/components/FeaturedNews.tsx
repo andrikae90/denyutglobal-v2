@@ -94,8 +94,12 @@ export const FeaturedNews: React.FC<FeaturedNewsProps> = ({
                 <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
                   <Clock className="w-3 h-3 text-slate-400" />
                   <span>{item.tanggal}</span>
-                  <span>•</span>
-                  <span>{item.namaSumber}</span>
+                  {item.waktu && (
+                    <>
+                      <span>•</span>
+                      <span>{item.waktu}</span>
+                    </>
+                  )}
                 </div>
 
                 <h3 className="text-lg font-bold text-slate-900 group-hover:text-rose-600 transition-colors font-serif-headline leading-snug mb-2 line-clamp-2">

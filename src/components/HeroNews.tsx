@@ -37,7 +37,7 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
           {isLive && (
             <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[11px] font-bold rounded flex items-center gap-1 uppercase tracking-wider">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping" />
-              Live RSS: {heroItem.namaSumber}
+              Liputan Terkini
             </span>
           )}
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider hidden sm:inline">
@@ -110,20 +110,16 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
           {/* Hero Content Body */}
           <div className="p-5 sm:p-7 flex-1 flex flex-col justify-between">
             <div>
-              {/* Meta row with Source and Time (Visible below image on all screen sizes) */}
+              {/* Meta row with Time (Visible below image on all screen sizes) */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500 mb-3">
                 <span className="flex items-center gap-1 text-slate-600 font-medium">
                   <Clock className="w-3.5 h-3.5 text-slate-400" />
                   {heroItem.tanggal} • {heroItem.waktu}
                 </span>
-                <span className="text-slate-300">•</span>
-                <span className="font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
-                  Sumber: {heroItem.namaSumber}
-                </span>
                 {heroItem.readTimeMinutes && (
                   <>
-                    <span className="text-slate-300 hidden xs:inline">•</span>
-                    <span className="text-slate-500 hidden xs:inline">{heroItem.readTimeMinutes} menit baca</span>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-slate-500">{heroItem.readTimeMinutes} menit baca</span>
                   </>
                 )}
               </div>
@@ -153,21 +149,10 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
                   <span>Baca Ringkasan</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
-
-                <a
-                  id="hero-original-source-link"
-                  href={heroItem.urlSumber}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs sm:text-sm font-bold rounded-xl border border-rose-200 transition-colors duration-200"
-                >
-                  <span>Baca berita asli</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
               </div>
 
               <div className="text-xs text-slate-400">
-                <span>Sumber Terverifikasi</span>
+                <span>Laporan Terverifikasi</span>
               </div>
             </div>
           </div>
@@ -200,7 +185,6 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
                         <span>•</span>
                         <span>{item.negaraLokasi}</span>
                       </div>
-                      <span className="text-slate-300 font-medium">Sumber: {item.namaSumber}</span>
                     </div>
                     <h4 className="text-base font-bold text-slate-100 group-hover/item:text-rose-400 transition-colors font-serif-headline leading-snug mb-2">
                       {item.judul}
@@ -211,15 +195,6 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
                     <div className="mt-3 flex items-center justify-between text-[11px]">
                       <span className="text-slate-400">{item.waktu}</span>
                       <div className="flex items-center gap-2">
-                        <a
-                          href={item.urlSumber}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-rose-300 hover:text-rose-200 underline flex items-center gap-0.5"
-                        >
-                          Asli <ExternalLink className="w-3 h-3" />
-                        </a>
                         <span className="text-rose-400 font-semibold group-hover/item:underline flex items-center gap-1">
                           Baca <ArrowRight className="w-3 h-3" />
                         </span>
@@ -232,7 +207,7 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
 
             <div className="mt-4 pt-4 border-t border-slate-800 text-center">
               <p className="text-xs text-slate-400">
-                Menyajikan pembaruan terverifikasi dari BBC News & DW.
+                Menyajikan pembaruan terverifikasi redaksi DenyutGlobal.
               </p>
             </div>
           </div>

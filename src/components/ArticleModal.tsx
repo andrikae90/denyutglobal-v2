@@ -465,9 +465,10 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
             <div className="space-y-2">
               {article.sources && article.sources.length > 0 ? (
                 article.sources.map((src, sIdx) => (
-                  <div key={sIdx} className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <div key={sIdx} className="p-3.5 bg-slate-800 rounded-xl border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                     <div>
-                      <strong className="text-white block sm:inline mr-2">{src.name}</strong>
+                      <span className="text-slate-400 text-[11px] block uppercase font-bold tracking-wider mb-0.5">Sumber</span>
+                      <strong className="text-white text-sm font-semibold block sm:inline mr-2">{src.name}</strong>
                       {src.date && <span className="text-slate-400">({src.date})</span>}
                       {src.notes && <p className="text-slate-400 text-[11px] mt-0.5">{src.notes}</p>}
                     </div>
@@ -476,7 +477,7 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
                         href={src.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 font-semibold shrink-0"
+                        className="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 font-semibold text-xs shrink-0"
                       >
                         <span>Akses Tautan Sumber</span>
                         <ExternalLink className="w-3 h-3" />
@@ -485,16 +486,19 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
                   </div>
                 ))
               ) : (
-                <div className="p-3 bg-slate-800 rounded-xl text-xs text-slate-300 flex items-center justify-between">
-                  <span>Sumber: <strong>{article.namaSumber || 'Redaksi DenyutGlobal'}</strong></span>
+                <div className="p-3.5 bg-slate-800 rounded-xl text-xs text-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border border-slate-700">
+                  <div>
+                    <span className="text-slate-400 text-[11px] block uppercase font-bold tracking-wider mb-0.5">Sumber</span>
+                    <strong className="text-white text-sm font-semibold">{article.namaSumber || 'Redaksi DenyutGlobal'}</strong>
+                  </div>
                   {article.urlSumber && (
                     <a
                       href={article.urlSumber}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-rose-400 hover:text-rose-300 flex items-center gap-1 font-semibold"
+                      className="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 font-semibold text-xs"
                     >
-                      <span>Lihat Rujukan</span>
+                      <span>Lihat Tautan Rujukan</span>
                       <ExternalLink className="w-3 h-3" />
                     </a>
                   )}

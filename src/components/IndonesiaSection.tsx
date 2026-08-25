@@ -110,10 +110,12 @@ export const IndonesiaSection: React.FC<IndonesiaSectionProps> = ({
                       <Clock className="w-3 h-3 text-slate-400" />
                       {item.tanggal} • {item.waktu}
                     </span>
-                    <span>•</span>
-                    <span className="font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded">
-                      Sumber: {item.namaSumber}
-                    </span>
+                    {item.readTimeMinutes && (
+                      <>
+                        <span>•</span>
+                        <span>{item.readTimeMinutes} menit baca</span>
+                      </>
+                    )}
                   </div>
 
                   <h3 className="text-base sm:text-lg font-bold text-slate-900 group-hover:text-rose-600 transition-colors font-serif-headline leading-snug mb-2 line-clamp-2">
