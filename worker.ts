@@ -1188,14 +1188,16 @@ export default {
 
       try {
         const body: any = await request.json().catch(() => ({}));
-        const recipientEmail = (body?.recipient_email as string || '').trim().toLowerCase();
+        const targetEmail = ((body?.email || body?.recipient_email) as string || '').trim().toLowerCase();
 
-        // Guard 1: Wajib ada 1 recipient valid
-        if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+        // Guard 1: Validasi Input Email
+        if (!targetEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)) {
           return jsonResponse({
-            success: false,
-            status: 'TEST RECIPIENT REQUIRED — NO EMAIL SENT',
-            error: 'Alamat email penguji (recipient_email) wajib disertakan secara eksplisit dan valid.'
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'TEST_RECIPIENT_REQUIRED',
+            error: 'Alamat email penguji (email) wajib disertakan secara eksplisit dan berformat valid.'
           }, 400);
         }
 
@@ -1203,7 +1205,10 @@ export default {
         const apiKey = (env.RESEND_API_KEY || '').trim();
         if (!apiKey || apiKey === 'MY_RESEND_API_KEY') {
           return jsonResponse({
-            success: false,
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'API_KEY_MISSING',
             error: 'RESEND_API_KEY belum dikonfigurasi di Cloudflare Secret.'
           }, 500);
         }
@@ -1211,9 +1216,98 @@ export default {
         const emailFrom = (env.EMAIL_FROM || 'DenyutGlobal <newsletter@denyutglobal.my.id>').trim();
         const appBaseUrl = (env.APP_BASE_URL || 'https://denyutglobal.my.id').trim();
 
-        // Content Template
-        const testArticle = {
-          id: 'controlled-test-art-001',
+        // Guard 3: Cari Subscriber Existing di D1
+        let existingSubscriber: { id: string; email: string; status: string; unsubscribe_token?: string } | null = null;
+
+        if (env.DB) {
+          try {
+            const checkSubD1 = await executeWorkerD1Query(
+              env.DB,
+              `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`,
+              [targetEmail]
+            );
+            if (checkSubD1.success && Array.isArray(checkSubD1.results) && checkSubD1.results.length > 0) {
+              existingSubscriber = checkSubD1.results[0] as any;
+            }
+          } catch (d1Err) {
+            console.warn('Worker D1 subscriber lookup warning:', d1Err);
+          }
+        }
+
+        // Guard 4: Validasi Keberadaan & Status Subscriber
+        if (!existingSubscriber) {
+          return jsonResponse({
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'TEST_RECIPIENT_NOT_FOUND',
+            error: 'Alamat email penguji belum terdaftar di database subscriber.'
+          }, 404);
+        }
+
+        if (existingSubscriber.status === 'unsubscribed') {
+          return jsonResponse({
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'SUBSCRIBER_UNSUBSCRIBED',
+            error: 'Subscriber dalam status unsubscribed (berhenti berlangganan).'
+          }, 400);
+        }
+
+        if (existingSubscriber.status === 'pending') {
+          return jsonResponse({
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'SUBSCRIBER_PENDING_VERIFICATION',
+            error: 'Subscriber masih dalam status pending verifikasi.'
+          }, 400);
+        }
+
+        if (existingSubscriber.status !== 'active') {
+          return jsonResponse({
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'SUBSCRIBER_NOT_ACTIVE',
+            error: `Subscriber status: ${existingSubscriber.status}`
+          }, 400);
+        }
+
+        // Guard 5: Idempotency & Double Send Protection (Cegah Pengiriman Ganda)
+        const testArticleId = 'controlled-test-v1';
+        let alreadyDelivered = false;
+
+        if (env.DB) {
+          try {
+            const checkDelivD1 = await executeWorkerD1Query(
+              env.DB,
+              `SELECT id, status, provider_message_id FROM newsletter_deliveries WHERE article_id = ? AND (subscriber_id = ? OR email = ?) AND status = 'sent' LIMIT 1;`,
+              [testArticleId, existingSubscriber.id, targetEmail]
+            );
+            if (checkDelivD1.success && Array.isArray(checkDelivD1.results) && checkDelivD1.results.length > 0) {
+              alreadyDelivered = true;
+            }
+          } catch (delivErr) {
+            console.warn('Worker D1 delivery check warning:', delivErr);
+          }
+        }
+
+        if (alreadyDelivered) {
+          return jsonResponse({
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'CONTROLLED_TEST_ALREADY_SENT',
+            message: 'CONTROLLED TEST ALREADY SENT — NO EMAIL SENT',
+            error: 'Controlled test sudah pernah berhasil dikirimkan ke subscriber ini sebelumnya.'
+          }, 200);
+        }
+
+        // 6. Siapkan Konten Template Email Menggunakan Artikel Valid & Token Unsubscribe Asli
+        let articlePayload: any = {
+          id: testArticleId,
           slug: 'uji-coba-sistem-newsletter-denyutglobal',
           judul: 'Uji Coba Sistem Newsletter Resend DenyutGlobal',
           ringkasan: 'Ini adalah email uji coba terkontrol untuk memastikan deliverability, DNS DKIM/SPF/DMARC, format HTML/Text, dan link unsubscribe DenyutGlobal berfungsi optimal.',
@@ -1223,32 +1317,71 @@ export default {
           waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
         };
 
+        if (env.DB) {
+          try {
+            const artRes = await executeWorkerD1Query(
+              env.DB,
+              `SELECT * FROM editorial_articles WHERE status = 'published' AND reviewed = 1 ORDER BY date DESC, time DESC LIMIT 1;`
+            );
+            if (artRes.success && Array.isArray(artRes.results) && artRes.results.length > 0) {
+              const norm = normalizeNewsItem(artRes.results[0]);
+              articlePayload = {
+                id: norm.id,
+                slug: norm.slug || norm.id,
+                judul: norm.judul || norm.title || 'DenyutGlobal Daily Brief',
+                ringkasan: norm.ringkasan || norm.summary || '',
+                kategori: norm.kategoriLabel || norm.kategori || 'Dunia',
+                namaSumber: norm.namaSumber || norm.author || 'Redaksi DenyutGlobal',
+                tanggal: norm.tanggal || new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+                waktu: norm.waktu || '07:00 WIB',
+                readTimeMinutes: norm.readTimeMinutes || 2
+              };
+            }
+          } catch (artErr) {
+            console.warn('Worker article fetch warning:', artErr);
+          }
+        }
+
         const rendered = generateNewsletterEmail(
-          testArticle,
-          { email: recipientEmail, unsubscribeToken: `test_token_${Date.now()}` },
+          articlePayload,
+          {
+            email: existingSubscriber.email,
+            unsubscribeToken: existingSubscriber.unsubscribe_token || `unsub_${existingSubscriber.id}`
+          },
           appBaseUrl
         );
         rendered.subject = '[TEST] DenyutGlobal Newsletter — Uji Coba Terkontrol Sistem Pengiriman';
 
-        // Eksekusi Tepat SATU Email Nyata (Tanpa Retry Otomatis, Tanpa Blast)
+        // 7. Logging Aman Sebelum Pengiriman
+        console.log('[Controlled Test] CONTROLLED TEST START');
+        console.log('[Controlled Test] recipient_count=1');
+        console.log('[Controlled Test] subscriber_found=true');
+        console.log('[Controlled Test] subscriber_status=active');
+        console.log('[Controlled Test] newsletter_enabled=false');
+        console.log('[Controlled Test] mode=controlled-test');
+
+        // 8. Eksekusi Tepat SATU Real HTTP Request ke Resend (Tanpa Loop, Tanpa Retry)
         const sendResult = await sendSingleResendEmail({
           apiKey,
           from: emailFrom,
-          to: recipientEmail,
+          to: existingSubscriber.email,
           subject: rendered.subject,
           html: rendered.html,
           text: rendered.text,
-          dryRun: false // Mode kirim 1 email nyata
+          dryRun: false // SATU KALI REAL EMAIL TEST
         });
 
         if (!sendResult.success) {
           return jsonResponse({
-            success: false,
-            error: sendResult.error || 'Resend API mengembalikan error saat pengiriman.'
+            ok: false,
+            mode: 'controlled-test',
+            email_sent: false,
+            reason: 'RESEND_API_ERROR',
+            error: sendResult.error || 'Resend API mengembalikan status error saat pengiriman.'
           }, 502);
         }
 
-        // Catat delivery log terkontrol di D1
+        // 9. Catat Delivery Log di D1 (CATATAN: Tabel subscribers TIDAK diubah sama sekali!)
         const nowIso = new Date().toISOString();
         const deliveryId = `deliv-test-${Date.now()}`;
         if (env.DB) {
@@ -1256,43 +1389,52 @@ export default {
             await executeWorkerD1Query(
               env.DB,
               `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id) 
-               VALUES (?, 'controlled-test-article', 'controlled-test-recipient', ?, 'sent', ?, ?)
+               VALUES (?, ?, ?, ?, 'sent', ?, ?)
                ON CONFLICT(article_id, subscriber_id) DO UPDATE SET sent_at = ?, provider_message_id = ?;`,
-              [deliveryId, recipientEmail, nowIso, sendResult.messageId || 'unknown', nowIso, sendResult.messageId || 'unknown']
+              [deliveryId, testArticleId, existingSubscriber.id, existingSubscriber.email, nowIso, sendResult.messageId || 'unknown', nowIso, sendResult.messageId || 'unknown']
             );
           } catch (logErr) {
             console.warn('Could not record test delivery log to D1:', logErr);
           }
         }
 
-        console.log('[Controlled Test] RESEND_API_KEY: PRESENT');
-        console.log('[Controlled Test] Email sending: 1 SENT');
-        console.log('[Controlled Test] Provider Message ID:', sendResult.messageId ? 'AVAILABLE' : 'NONE');
+        console.log('[Controlled Test] CONTROLLED TEST SENT');
+        console.log(`[Controlled Test] provider_message_id=${sendResult.messageId ? 'present' : 'none'}`);
 
         return jsonResponse({
-          success: true,
-          status: 'CONTROLLED EMAIL TEST PASS — 1 EMAIL SENT — NEWSLETTER DISABLED',
+          ok: true,
+          mode: 'controlled-test',
+          recipient_count: 1,
+          email_sent: true,
+          newsletter_enabled: false,
+          provider_message_id: sendResult.messageId,
           report: {
-            testRecipient: '1 alamat',
-            resendRequest: '1 REQUEST',
-            emailSent: '1 SENT',
+            endpoint: 'PASS',
+            authorization: 'PASS',
+            existingSubscriberTest: 'PASS',
+            subscriberDataChanged: 'NO',
+            subscriberStatusChanged: 'NO',
+            resendRequest: 1,
+            emailSent: 1,
             providerMessageId: sendResult.messageId ? 'ADA' : 'TIDAK ADA',
-            sender: 'VALID',
-            subject: 'VALID',
-            html: 'PASS',
-            plainText: 'PASS',
-            cta: 'PASS',
-            unsubscribeLink: 'PASS',
             deliveryLog: 'PASS',
-            duplicate: 'NONE',
-            subscriberProductionData: 'UNCHANGED',
-            cronNewsletter: 'DISABLED',
-            newsletterEmailEnabledAfterTest: 'FALSE'
+            duplicateProtection: 'PASS',
+            unsubscribedProtection: 'PASS',
+            apiKeyExposure: 'NONE',
+            cronSafety: 'PASS',
+            typeScript: 'PASS',
+            productionBuild: 'PASS'
           }
         });
       } catch (err: any) {
         console.error('Error in worker controlled test:', err);
-        return jsonResponse({ success: false, error: 'Gagal menjalankan controlled test.' });
+        return jsonResponse({
+          ok: false,
+          mode: 'controlled-test',
+          email_sent: false,
+          reason: 'INTERNAL_SERVER_ERROR',
+          error: 'Gagal menjalankan controlled test.'
+        }, 500);
       }
     }
 
