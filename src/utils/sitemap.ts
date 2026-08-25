@@ -40,10 +40,31 @@ export interface SitemapArticleInput {
   [key: string]: any;
 }
 
+export const SITEMAP_STATIC_PAGES = [
+  { path: '/', priority: '1.0', changefreq: 'hourly' },
+  { path: '/kategori/dunia', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/asia', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/eropa', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/timur-tengah', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/amerika', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/indonesia', priority: '0.8', changefreq: 'hourly' },
+  { path: '/kategori/analisis-opini', priority: '0.8', changefreq: 'daily' },
+  { path: '/kategori/sosial-budaya', priority: '0.8', changefreq: 'daily' },
+  { path: '/pedoman-redaksi', priority: '0.6', changefreq: 'monthly' },
+  { path: '/pedoman-media-siber', priority: '0.6', changefreq: 'monthly' },
+  { path: '/kebijakan-koreksi', priority: '0.6', changefreq: 'monthly' },
+  { path: '/laporkan-koreksi', priority: '0.6', changefreq: 'monthly' },
+  { path: '/privacy-policy', priority: '0.6', changefreq: 'monthly' },
+  { path: '/terms', priority: '0.6', changefreq: 'monthly' },
+  { path: '/disclaimer', priority: '0.6', changefreq: 'monthly' },
+  { path: '/kontak', priority: '0.6', changefreq: 'monthly' },
+  { path: '/tentang-kami', priority: '0.6', changefreq: 'monthly' }
+];
+
 /**
  * Generates valid XML sitemap string conforming to http://www.sitemaps.org/schemas/sitemap/0.9
  * - Homepage: https://denyutglobal.my.id/
- * - Articles: https://denyutglobal.my.id/artikel/{slug}
+ * - Articles: https://denyutglobal.my.id/berita/{slug}
  * - Uses updated_at as lastmod if available; otherwise uses created_at
  */
 export function generateSitemapXml(
@@ -65,15 +86,18 @@ export function generateSitemapXml(
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
   xml += `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`;
 
-  // 1. Homepage
-  xml += `  <url>\n`;
-  xml += `    <loc>${escapeXml(`${cleanDomain}/`)}</loc>\n`;
-  xml += `    <lastmod>${todayIso}</lastmod>\n`;
-  xml += `    <changefreq>hourly</changefreq>\n`;
-  xml += `    <priority>1.0</priority>\n`;
-  xml += `  </url>\n`;
+  // 1. Static Pages & Categories
+  for (const page of SITEMAP_STATIC_PAGES) {
+    const loc = page.path === '/' ? `${cleanDomain}/` : `${cleanDomain}${page.path}`;
+    xml += `  <url>\n`;
+    xml += `    <loc>${escapeXml(loc)}</loc>\n`;
+    xml += `    <lastmod>${todayIso}</lastmod>\n`;
+    xml += `    <changefreq>${page.changefreq}</changefreq>\n`;
+    xml += `    <priority>${page.priority}</priority>\n`;
+    xml += `  </url>\n`;
+  }
 
-  // 2. Published & Reviewed Articles from D1
+  // 2. Published & Reviewed Articles
   for (const article of published) {
     const a = article as SitemapArticleInput;
     // Determine slug
@@ -105,7 +129,7 @@ export function generateSitemapXml(
       a.is_breaking
     );
     const priority = isHighPriority ? '0.9' : '0.8';
-    const loc = `${cleanDomain}/artikel/${cleanSlug}`;
+    const loc = `${cleanDomain}/berita/${cleanSlug}`;
 
     xml += `  <url>\n`;
     xml += `    <loc>${escapeXml(loc)}</loc>\n`;
@@ -118,3 +142,4 @@ export function generateSitemapXml(
   xml += `</urlset>\n`;
   return xml;
 }
+

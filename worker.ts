@@ -1771,23 +1771,35 @@ Kembalikan HANYA format JSON valid:
       });
     }
 
-    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1)
+    // 17.5 SITEMAP REDIRECTS (/sitemap, /sitemap_index.xml -> /sitemap.xml)
+    if ((pathname === '/sitemap' || pathname === '/sitemap_index.xml') && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      return Response.redirect(`${appUrl}/sitemap.xml`, 301);
+    }
+
+    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1 + Fallback Terjamin)
     if (pathname === '/sitemap.xml' && (method === 'GET' || method === 'HEAD')) {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
       let articles: any[] = [];
 
       if (method === 'GET') {
         if (env.DB) {
-          const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
-          const res = await executeWorkerD1Query(env.DB, sql);
-          if (res.success && Array.isArray(res.results)) {
-            articles = res.results;
+          try {
+            const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' ORDER BY created_at DESC;`;
+            const res = await executeWorkerD1Query(env.DB, sql);
+            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
+              articles = res.results;
+            }
+          } catch (d1Err) {
+            console.warn('[Worker Sitemap] D1 query fallback to cache/samples:', d1Err);
           }
-        } else {
-          // Fallback jika env.DB belum terikat di runtime worker lokal
-          articles = memoryArticlesCache.filter(
-            a => a.status === 'published' && Boolean(a.reviewed)
-          );
+        }
+
+        // Fallback jika D1 kosong atau query belum mengembalikan artikel
+        if (articles.length === 0) {
+          articles = memoryArticlesCache && memoryArticlesCache.length > 0
+            ? memoryArticlesCache
+            : INITIAL_EDITORIAL_ARTICLES;
         }
       }
 
@@ -1796,7 +1808,9 @@ Kembalikan HANYA format JSON valid:
         status: 200,
         headers: {
           'Content-Type': 'application/xml; charset=utf-8',
-          'Cache-Control': 'public, max-age=3600, s-maxage=3600'
+          'Cache-Control': 'public, max-age=1800, s-maxage=1800',
+          'X-Robots-Tag': 'index, follow',
+          'Access-Control-Allow-Origin': '*'
         }
       });
     }
