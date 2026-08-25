@@ -21,6 +21,9 @@
     }
   ],
   "vars": {
-    "APP_URL": "https://denyutglobal.my.id"
+    "APP_URL": "https://denyutglobal.my.id",
+    "NEWSLETTER_EMAIL_ENABLED": "false",
+    "EMAIL_FROM": "DenyutGlobal <newsletter@denyutglobal.my.id>",
+    "APP_BASE_URL": "https://denyutglobal.my.id"
   }
 }
