@@ -22,6 +22,7 @@ import { RadarVerificationModal } from './RadarVerificationModal';
 import { AddPrimaryTopicModal } from './AddPrimaryTopicModal';
 import { ArticleRevisionPanel } from './ArticleRevisionPanel';
 import { ManuscriptImportPanel, FormSnapshot } from './ManuscriptImportPanel';
+import { ControlledEmailTestPanel } from './ControlledEmailTestPanel';
 import { ParsedManuscript } from '../utils/manuscriptParser';
 import { 
   X, 
@@ -60,7 +61,8 @@ import {
   CheckCheck,
   Camera,
   Upload,
-  Link2
+  Link2,
+  Mail
 } from 'lucide-react';
 
 interface EditorModalProps {
@@ -84,7 +86,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   onSelectArticlePreview,
   onLogout
 }) => {
-  const [activeTab, setActiveTab] = useState<'form' | 'list' | 'wire' | 'factcheck'>('form');
+  const [activeTab, setActiveTab] = useState<'form' | 'list' | 'wire' | 'factcheck' | 'newsletter'>('form');
   const [listFilter, setListFilter] = useState<'all' | 'draft' | 'review' | 'approved' | 'published'>('all');
   const [isSaving, setIsSaving] = useState(false);
   
@@ -1378,6 +1380,20 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
             >
               <Radio className="w-3.5 h-3.5 text-rose-500" />
               <span>📡 Radar Berita ({radarItems.length})</span>
+            </button>
+
+            <button
+              id="editorial-tab-newsletter-test"
+              onClick={() => setActiveTab('newsletter')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'newsletter'
+                  ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Controlled Email Test</span>
+              <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">ADMIN</span>
             </button>
           </div>
 
@@ -2877,6 +2893,11 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
               onOpenAddModal={() => setIsAddPrimaryModalOpen(true)}
               processingDraftId={processingRadarDraftId}
             />
+          )}
+
+          {/* TAB 5: CONTROLLED REAL EMAIL TEST (ADMIN ONLY) */}
+          {activeTab === 'newsletter' && (
+            <ControlledEmailTestPanel />
           )}
         </div>
       </div>
