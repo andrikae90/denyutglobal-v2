@@ -37,5 +37,6 @@ CREATE TABLE IF NOT EXISTS newsletter_deliveries (
   UNIQUE(article_id, subscriber_id)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_art_sub_unique ON newsletter_deliveries(article_id, subscriber_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_art_sub ON newsletter_deliveries(article_id, subscriber_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON newsletter_deliveries(status);

@@ -326,6 +326,36 @@ async function executeWorkerD1Query<T = any>(
   }
 }
 
+async function ensureNewsletterDeliveriesD1Table(db: WorkerD1Database): Promise<void> {
+  try {
+    await executeWorkerD1Query(
+      db,
+      `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
+        id TEXT PRIMARY KEY,
+        article_id TEXT NOT NULL,
+        subscriber_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        status TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        provider_message_id TEXT,
+        error_message TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(article_id, subscriber_id)
+      );`
+    );
+    await executeWorkerD1Query(
+      db,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_art_sub_unique ON newsletter_deliveries(article_id, subscriber_id);`
+    ).catch(() => {});
+    await executeWorkerD1Query(
+      db,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_status ON newsletter_deliveries(status);`
+    ).catch(() => {});
+  } catch (initErr) {
+    console.warn('Worker ensureNewsletterDeliveriesD1Table warning:', initErr);
+  }
+}
+
 // =====================================================================
 // AUTHENTICATION UTILITIES
 // =====================================================================
@@ -606,22 +636,8 @@ export default {
           await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN unsubscribe_token TEXT;`).catch(() => {});
           await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN unsubscribed_at TEXT;`).catch(() => {});
 
-          // Pastikan tabel delivery log ada
-          await executeWorkerD1Query(
-            env.DB,
-            `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
-              id TEXT PRIMARY KEY,
-              article_id TEXT NOT NULL,
-              subscriber_id TEXT NOT NULL,
-              email TEXT NOT NULL,
-              status TEXT NOT NULL,
-              sent_at TEXT NOT NULL,
-              provider_message_id TEXT,
-              error_message TEXT,
-              created_at TEXT DEFAULT (datetime('now'))
-            );`
-          );
-          await executeWorkerD1Query(env.DB, `CREATE INDEX IF NOT EXISTS idx_deliveries_art_sub ON newsletter_deliveries(article_id, subscriber_id);`).catch(() => {});
+          // Pastikan tabel delivery log ada dengan unique constraint & index
+          await ensureNewsletterDeliveriesD1Table(env.DB);
 
           // Cek apakah email sudah terdaftar sebelumnya
           const checkRes = await executeWorkerD1Query(
@@ -1281,6 +1297,7 @@ export default {
 
         if (env.DB) {
           try {
+            await ensureNewsletterDeliveriesD1Table(env.DB);
             const checkDelivD1 = await executeWorkerD1Query(
               env.DB,
               `SELECT id, status, provider_message_id FROM newsletter_deliveries WHERE article_id = ? AND (subscriber_id = ? OR email = ?) AND status = 'sent' LIMIT 1;`,
@@ -1386,15 +1403,24 @@ export default {
         const deliveryId = `deliv-test-${Date.now()}`;
         if (env.DB) {
           try {
-            await executeWorkerD1Query(
+            await ensureNewsletterDeliveriesD1Table(env.DB);
+            const insertRes = await executeWorkerD1Query(
               env.DB,
-              `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id) 
-               VALUES (?, ?, ?, ?, 'sent', ?, ?)
-               ON CONFLICT(article_id, subscriber_id) DO UPDATE SET sent_at = ?, provider_message_id = ?;`,
-              [deliveryId, testArticleId, existingSubscriber.id, existingSubscriber.email, nowIso, sendResult.messageId || 'unknown', nowIso, sendResult.messageId || 'unknown']
+              `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id, created_at) 
+               VALUES (?, ?, ?, ?, 'sent', ?, ?, ?)
+               ON CONFLICT(article_id, subscriber_id) DO UPDATE SET
+                 status = 'sent',
+                 sent_at = excluded.sent_at,
+                 provider_message_id = excluded.provider_message_id;`,
+              [deliveryId, testArticleId, existingSubscriber.id, existingSubscriber.email, nowIso, sendResult.messageId || 'unknown', nowIso]
             );
-          } catch (logErr) {
-            console.warn('Could not record test delivery log to D1:', logErr);
+            if (!insertRes.success) {
+              console.error('[Controlled Test D1 Error] Failed to write delivery log:', insertRes.error);
+            } else {
+              console.log('[Controlled Test D1 Success] Delivery log recorded in D1.');
+            }
+          } catch (logErr: any) {
+            console.error('[Controlled Test D1 Error] Exception while recording delivery log:', logErr?.message || logErr);
           }
         }
 

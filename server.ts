@@ -507,6 +507,39 @@ async function executeD1Query<T = any>(
   };
 }
 
+async function ensureNewsletterDeliveriesTable(req?: express.Request): Promise<void> {
+  try {
+    await executeD1Query(
+      `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
+        id TEXT PRIMARY KEY,
+        article_id TEXT NOT NULL,
+        subscriber_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        status TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        provider_message_id TEXT,
+        error_message TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(article_id, subscriber_id)
+      );`,
+      [],
+      req
+    );
+    await executeD1Query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_art_sub_unique ON newsletter_deliveries(article_id, subscriber_id);`,
+      [],
+      req
+    ).catch(() => {});
+    await executeD1Query(
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_status ON newsletter_deliveries(status);`,
+      [],
+      req
+    ).catch(() => {});
+  } catch (initErr) {
+    console.warn('ensureNewsletterDeliveriesTable warning:', initErr);
+  }
+}
+
 // Editorial Session Passphrase Hash & Session Tokens Store
 const EDITORIAL_PASSPHRASE_SHA256_HASH = process.env.EDITORIAL_PASSPHRASE_SHA256_HASH || '518f21a9a8470c890258ddaa2dc85c5483f597e22d7dc4b4a825208aa0eb1ea7';
 const activeEditorialSessions = new Map<string, number>(); // token -> expiresAt
@@ -846,22 +879,7 @@ async function startServer() {
         await executeD1Query(`ALTER TABLE subscribers ADD COLUMN unsubscribed_at TEXT;`, [], req).catch(() => {});
 
         // Log table for newsletter deliveries
-        await executeD1Query(
-          `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
-            id TEXT PRIMARY KEY,
-            article_id TEXT NOT NULL,
-            subscriber_id TEXT NOT NULL,
-            email TEXT NOT NULL,
-            status TEXT NOT NULL,
-            sent_at TEXT NOT NULL,
-            provider_message_id TEXT,
-            error_message TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-          );`,
-          [],
-          req
-        );
-        await executeD1Query(`CREATE INDEX IF NOT EXISTS idx_deliveries_art_sub ON newsletter_deliveries(article_id, subscriber_id);`, [], req).catch(() => {});
+        await ensureNewsletterDeliveriesTable(req);
 
         const checkRes = await executeD1Query(
           `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
@@ -1675,6 +1693,7 @@ async function startServer() {
       let alreadyDelivered = false;
 
       try {
+        await ensureNewsletterDeliveriesTable(req);
         const checkDelivD1 = await executeD1Query(
           `SELECT id, status, provider_message_id FROM newsletter_deliveries WHERE article_id = ? AND (subscriber_id = ? OR email = ?) AND status = 'sent' LIMIT 1;`,
           [testArticleId, existingSubscriber.id, targetEmail],
@@ -1765,15 +1784,24 @@ async function startServer() {
       const nowIso = new Date().toISOString();
       const deliveryId = `deliv-test-${Date.now()}`;
       try {
-        await executeD1Query(
-          `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id) 
-           VALUES (?, ?, ?, ?, 'sent', ?, ?)
-           ON CONFLICT(article_id, subscriber_id) DO UPDATE SET sent_at = ?, provider_message_id = ?;`,
-          [deliveryId, testArticleId, existingSubscriber.id, existingSubscriber.email, nowIso, sendResult.messageId || 'unknown', nowIso, sendResult.messageId || 'unknown'],
+        await ensureNewsletterDeliveriesTable(req);
+        const insertRes = await executeD1Query(
+          `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id, created_at) 
+           VALUES (?, ?, ?, ?, 'sent', ?, ?, ?)
+           ON CONFLICT(article_id, subscriber_id) DO UPDATE SET
+             status = 'sent',
+             sent_at = excluded.sent_at,
+             provider_message_id = excluded.provider_message_id;`,
+          [deliveryId, testArticleId, existingSubscriber.id, existingSubscriber.email, nowIso, sendResult.messageId || 'unknown', nowIso],
           req
         );
-      } catch (logErr) {
-        console.warn('Could not record test delivery log to D1:', logErr);
+        if (!insertRes.success) {
+          console.error('[Controlled Test D1 Error] Failed to write delivery log:', insertRes.error);
+        } else {
+          console.log('[Controlled Test D1 Success] Delivery log recorded in D1.');
+        }
+      } catch (logErr: any) {
+        console.error('[Controlled Test D1 Error] Exception while recording delivery log:', logErr?.message || logErr);
       }
 
       console.log('[Controlled Test] CONTROLLED TEST SENT');
