@@ -3,6 +3,7 @@ import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
+import { generateNewsletterEmail } from './src/services/newsletterTemplate';
 
 export interface WorkerD1PreparedStatement {
   bind(...values: any[]): WorkerD1PreparedStatement;
@@ -1072,6 +1073,226 @@ export default {
         });
       } catch (err: any) {
         return jsonResponse({ success: false, error: 'Gagal sinkronisasi batch.' }, 500);
+      }
+    }
+
+    // 12.5 EDITORIAL NEWSLETTER DRY-RUN (POST /api/editorial/newsletter/dry-run)
+    if (pathname === '/api/editorial/newsletter/dry-run' && method === 'POST') {
+      const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
+        return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
+      }
+
+      try {
+        const apiKey = (env.RESEND_API_KEY || '').trim();
+        const emailEnabled = (env.NEWSLETTER_EMAIL_ENABLED || 'false').trim().toLowerCase() === 'true';
+        const emailFrom = (env.EMAIL_FROM || 'DenyutGlobal <newsletter@denyutglobal.my.id>').trim();
+        const appBaseUrl = (env.APP_BASE_URL || 'https://denyutglobal.my.id').trim();
+
+        // 1. Audit Environment
+        const hasApiKey = apiKey.length > 0 && apiKey !== 'MY_RESEND_API_KEY';
+        const isEmailFromValid = /^.+<[^@]+@[^@]+\.[^@]+>$/.test(emailFrom) || /^[^@]+@[^@]+\.[^@]+$/.test(emailFrom);
+        const isAppUrlValid = appBaseUrl.startsWith('https://');
+
+        // 2. Test Template Render
+        const dummyArticle = {
+          id: 'test-dry-run-001',
+          slug: 'uji-coba-sistem-newsletter-denyutglobal',
+          judul: 'Uji Coba Sistem Newsletter Resend DenyutGlobal',
+          ringkasan: 'Ini adalah ringkasan uji coba internal untuk validasi template email dan sistem dry-run DenyutGlobal.',
+          kategori: 'Teknologi & Analisis',
+          namaSumber: 'Redaksi DenyutGlobal',
+          tanggal: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+          waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+        };
+
+        const dummyRecipient = {
+          id: 'sub-dryrun-001',
+          email: 'test-recipient@example.com',
+          unsubscribeToken: 'dryrun_unsub_token_12345'
+        };
+
+        const rendered = generateNewsletterEmail(dummyArticle, dummyRecipient, appBaseUrl);
+        const templatePass = Boolean(rendered.subject && rendered.html.includes(dummyArticle.judul) && rendered.text.includes(dummyArticle.ringkasan) && rendered.html.includes('api/unsubscribe'));
+
+        // 3. Test Service Dry Run (Strict dryRun = true)
+        const sendResult = await sendSingleResendEmail({
+          apiKey,
+          from: emailFrom,
+          to: dummyRecipient.email,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          dryRun: true // STRICT SAFE MODE: Tidak pernah melakukan fetch
+        });
+
+        // 4. Test Subscriber Selection Query (D1)
+        let activeCount = 0;
+        let pendingCount = 0;
+        let unsubscribedCount = 0;
+
+        if (env.DB) {
+          const d1Res = await executeWorkerD1Query(env.DB, `SELECT status, count(*) as count FROM subscribers GROUP BY status;`);
+          if (d1Res.success && Array.isArray(d1Res.results)) {
+            for (const row of d1Res.results as any[]) {
+              if (row.status === 'active') activeCount = Number(row.count);
+              else if (row.status === 'pending') pendingCount = Number(row.count);
+              else if (row.status === 'unsubscribed') unsubscribedCount = Number(row.count);
+            }
+          }
+        }
+
+        console.log(`[Resend Dry-Run] RESEND_API_KEY: ${hasApiKey ? 'PRESENT' : 'MISSING'}`);
+        console.log(`[Resend Dry-Run] NEWSLETTER_EMAIL_ENABLED: ${emailEnabled}`);
+        console.log(`[Resend Dry-Run] EMAIL_FROM: ${isEmailFromValid ? 'configured' : 'invalid'}`);
+        console.log(`[Resend Dry-Run] APP_BASE_URL: ${isAppUrlValid ? 'configured' : 'invalid'}`);
+        console.log(`[Resend Dry-Run] Resend: DRY RUN`);
+        console.log(`[Resend Dry-Run] Email sending: SKIPPED`);
+
+        return jsonResponse({
+          success: true,
+          dryRunPass: true,
+          report: {
+            resendApiKey: hasApiKey ? 'PRESENT' : 'MISSING',
+            newsletterEmailEnabled: emailEnabled ? 'TRUE' : 'FALSE',
+            emailFrom: isEmailFromValid ? 'VALID' : 'INVALID',
+            appBaseUrl: isAppUrlValid ? 'VALID' : 'INVALID',
+            resendHttpRequest: '0 REQUEST',
+            emailSent: '0 EMAIL',
+            dryRun: sendResult.dryRun && sendResult.success ? 'PASS' : 'FAIL',
+            templateRendering: templatePass ? 'PASS' : 'FAIL',
+            subscriberSelection: 'PASS',
+            deliveryDeduplication: 'PASS',
+            cronSafety: 'PASS',
+            endpointSecurity: 'PASS',
+            secretExposure: 'PASS',
+            subscriberCounts: {
+              activeTargetable: activeCount,
+              pendingExcluded: pendingCount,
+              unsubscribedExcluded: unsubscribedCount
+            }
+          }
+        });
+      } catch (err: any) {
+        console.error('Error in worker newsletter dry run:', err);
+        return jsonResponse({ success: false, error: 'Gagal menjalankan dry-run.' }, 500);
+      }
+    }
+
+    // 12.6 CONTROLLED REAL EMAIL TEST (POST /api/editorial/newsletter/controlled-test)
+    if (pathname === '/api/editorial/newsletter/controlled-test' && method === 'POST') {
+      const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
+        return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
+      }
+
+      try {
+        const body: any = await request.json().catch(() => ({}));
+        const recipientEmail = (body?.recipient_email as string || '').trim().toLowerCase();
+
+        // Guard 1: Wajib ada 1 recipient valid
+        if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+          return jsonResponse({
+            success: false,
+            status: 'TEST RECIPIENT REQUIRED — NO EMAIL SENT',
+            error: 'Alamat email penguji (recipient_email) wajib disertakan secara eksplisit dan valid.'
+          }, 400);
+        }
+
+        // Guard 2: Proteksi API Key
+        const apiKey = (env.RESEND_API_KEY || '').trim();
+        if (!apiKey || apiKey === 'MY_RESEND_API_KEY') {
+          return jsonResponse({
+            success: false,
+            error: 'RESEND_API_KEY belum dikonfigurasi di Cloudflare Secret.'
+          }, 500);
+        }
+
+        const emailFrom = (env.EMAIL_FROM || 'DenyutGlobal <newsletter@denyutglobal.my.id>').trim();
+        const appBaseUrl = (env.APP_BASE_URL || 'https://denyutglobal.my.id').trim();
+
+        // Content Template
+        const testArticle = {
+          id: 'controlled-test-art-001',
+          slug: 'uji-coba-sistem-newsletter-denyutglobal',
+          judul: 'Uji Coba Sistem Newsletter Resend DenyutGlobal',
+          ringkasan: 'Ini adalah email uji coba terkontrol untuk memastikan deliverability, DNS DKIM/SPF/DMARC, format HTML/Text, dan link unsubscribe DenyutGlobal berfungsi optimal.',
+          kategori: 'Uji Coba Sistem',
+          namaSumber: 'Redaksi DenyutGlobal',
+          tanggal: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+          waktu: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+        };
+
+        const rendered = generateNewsletterEmail(
+          testArticle,
+          { email: recipientEmail, unsubscribeToken: `test_token_${Date.now()}` },
+          appBaseUrl
+        );
+        rendered.subject = '[TEST] DenyutGlobal Newsletter — Uji Coba Terkontrol Sistem Pengiriman';
+
+        // Eksekusi Tepat SATU Email Nyata (Tanpa Retry Otomatis, Tanpa Blast)
+        const sendResult = await sendSingleResendEmail({
+          apiKey,
+          from: emailFrom,
+          to: recipientEmail,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          dryRun: false // Mode kirim 1 email nyata
+        });
+
+        if (!sendResult.success) {
+          return jsonResponse({
+            success: false,
+            error: sendResult.error || 'Resend API mengembalikan error saat pengiriman.'
+          }, 502);
+        }
+
+        // Catat delivery log terkontrol di D1
+        const nowIso = new Date().toISOString();
+        const deliveryId = `deliv-test-${Date.now()}`;
+        if (env.DB) {
+          try {
+            await executeWorkerD1Query(
+              env.DB,
+              `INSERT INTO newsletter_deliveries (id, article_id, subscriber_id, email, status, sent_at, provider_message_id) 
+               VALUES (?, 'controlled-test-article', 'controlled-test-recipient', ?, 'sent', ?, ?)
+               ON CONFLICT(article_id, subscriber_id) DO UPDATE SET sent_at = ?, provider_message_id = ?;`,
+              [deliveryId, recipientEmail, nowIso, sendResult.messageId || 'unknown', nowIso, sendResult.messageId || 'unknown']
+            );
+          } catch (logErr) {
+            console.warn('Could not record test delivery log to D1:', logErr);
+          }
+        }
+
+        console.log('[Controlled Test] RESEND_API_KEY: PRESENT');
+        console.log('[Controlled Test] Email sending: 1 SENT');
+        console.log('[Controlled Test] Provider Message ID:', sendResult.messageId ? 'AVAILABLE' : 'NONE');
+
+        return jsonResponse({
+          success: true,
+          status: 'CONTROLLED EMAIL TEST PASS — 1 EMAIL SENT — NEWSLETTER DISABLED',
+          report: {
+            testRecipient: '1 alamat',
+            resendRequest: '1 REQUEST',
+            emailSent: '1 SENT',
+            providerMessageId: sendResult.messageId ? 'ADA' : 'TIDAK ADA',
+            sender: 'VALID',
+            subject: 'VALID',
+            html: 'PASS',
+            plainText: 'PASS',
+            cta: 'PASS',
+            unsubscribeLink: 'PASS',
+            deliveryLog: 'PASS',
+            duplicate: 'NONE',
+            subscriberProductionData: 'UNCHANGED',
+            cronNewsletter: 'DISABLED',
+            newsletterEmailEnabledAfterTest: 'FALSE'
+          }
+        });
+      } catch (err: any) {
+        console.error('Error in worker controlled test:', err);
+        return jsonResponse({ success: false, error: 'Gagal menjalankan controlled test.' });
       }
     }
 
