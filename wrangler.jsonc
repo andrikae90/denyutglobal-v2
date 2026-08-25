@@ -22,7 +22,7 @@
   ],
   "vars": {
     "APP_URL": "https://denyutglobal.my.id",
-    "NEWSLETTER_EMAIL_ENABLED": "false",
+    "NEWSLETTER_EMAIL_ENABLED": "true",
     "EMAIL_FROM": "DenyutGlobal <newsletter@denyutglobal.my.id>",
     "APP_BASE_URL": "https://denyutglobal.my.id"
   }
