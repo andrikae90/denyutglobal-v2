@@ -29,8 +29,9 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenSubscription
 }) => {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<string>('');
 
   const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +44,7 @@ export const Footer: React.FC<FooterProps> = ({
     }
 
     if (!validateEmail(trimmed)) {
-      setErrorMsg('Masukkan alamat email yang valid.');
+      setErrorMsg('Silakan masukkan alamat email yang valid.');
       return;
     }
 
@@ -52,11 +53,18 @@ export const Footer: React.FC<FooterProps> = ({
     const result = await subscribeNewsletter(trimmed);
 
     if (result.success) {
-      setStatus('success');
+      if (result.isAlreadySubscribed) {
+        setStatus('already_subscribed');
+        setFeedbackMsg(result.message || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.');
+      } else {
+        setStatus('success');
+        setFeedbackMsg(result.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.');
+      }
       setTimeout(() => {
         setEmail('');
         setStatus('idle');
-      }, 5000);
+        setFeedbackMsg('');
+      }, 6000);
     } else {
       setStatus('error');
       setErrorMsg(result.error || 'Pendaftaran belum berhasil. Silakan coba lagi.');
@@ -79,10 +87,17 @@ export const Footer: React.FC<FooterProps> = ({
 
           <div className="w-full lg:w-auto max-w-md space-y-2">
             {status === 'success' ? (
-              <div className="p-3 bg-emerald-950/80 border border-emerald-500/30 rounded-xl text-emerald-200 text-xs flex items-center gap-2">
+              <div role="status" aria-live="polite" className="p-3 bg-emerald-950/80 border border-emerald-500/30 rounded-xl text-emerald-200 text-xs flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="font-medium">
-                  ✓ Terima kasih! Alamat email Anda berhasil didaftarkan untuk menerima Daily Brief DenyutGlobal.
+                  {feedbackMsg || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'}
+                </span>
+              </div>
+            ) : status === 'already_subscribed' ? (
+              <div role="status" aria-live="polite" className="p-3 bg-blue-950/80 border border-blue-500/30 rounded-xl text-blue-200 text-xs flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-blue-400 shrink-0" />
+                <span className="font-medium">
+                  {feedbackMsg || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'}
                 </span>
               </div>
             ) : (
@@ -92,6 +107,7 @@ export const Footer: React.FC<FooterProps> = ({
                   <input
                     id="newsletter-email-input"
                     type="email"
+                    name="email"
                     value={email}
                     onChange={(e) => {
                       setEmail(e.target.value);
@@ -99,6 +115,9 @@ export const Footer: React.FC<FooterProps> = ({
                     }}
                     placeholder="Masukkan alamat email Anda"
                     disabled={status === 'loading'}
+                    aria-label="Alamat Email untuk Langganan"
+                    aria-required="true"
+                    aria-invalid={Boolean(errorMsg)}
                     className="w-full pl-10 pr-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-rose-500/50"
                   />
                 </div>
@@ -109,7 +128,10 @@ export const Footer: React.FC<FooterProps> = ({
                   className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs sm:text-sm font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
                 >
                   {status === 'loading' ? (
-                    <span>Mendaftarkan...</span>
+                    <span className="flex items-center gap-1.5">
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Mendaftarkan...</span>
+                    </span>
                   ) : (
                     <>
                       <span>Langganan</span>
@@ -121,7 +143,7 @@ export const Footer: React.FC<FooterProps> = ({
             )}
 
             {errorMsg && (
-              <p className="text-[11px] text-rose-400 font-medium">
+              <p role="alert" className="text-[11px] text-rose-400 font-medium">
                 {errorMsg}
               </p>
             )}

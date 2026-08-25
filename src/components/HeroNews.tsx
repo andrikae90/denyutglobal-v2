@@ -63,8 +63,6 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
             />
-            {/* Gradient Overlay for text protection */}
-            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/30 to-transparent" />
 
             {/* Top Badges */}
             <div className="absolute top-4 left-4 flex flex-wrap gap-2 items-center">
@@ -107,34 +105,25 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
                 <Share2 className="w-4 h-4" />
               </button>
             </div>
-
-            {/* Time & Source Overlay for mobile */}
-            <div className="absolute bottom-4 left-4 right-4 text-slate-300 text-xs flex items-center justify-between sm:hidden">
-              <span className="flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5" />
-                {heroItem.waktu}
-              </span>
-              <span className="font-semibold text-white">Sumber: {heroItem.namaSumber}</span>
-            </div>
           </div>
 
           {/* Hero Content Body */}
           <div className="p-5 sm:p-7 flex-1 flex flex-col justify-between">
             <div>
-              {/* Meta row for desktop */}
-              <div className="hidden sm:flex items-center gap-3 text-xs text-slate-500 mb-3">
+              {/* Meta row with Source and Time (Visible below image on all screen sizes) */}
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500 mb-3">
                 <span className="flex items-center gap-1 text-slate-600 font-medium">
                   <Clock className="w-3.5 h-3.5 text-slate-400" />
                   {heroItem.tanggal} • {heroItem.waktu}
                 </span>
-                <span>•</span>
+                <span className="text-slate-300">•</span>
                 <span className="font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
                   Sumber: {heroItem.namaSumber}
                 </span>
                 {heroItem.readTimeMinutes && (
                   <>
-                    <span>•</span>
-                    <span className="text-slate-500">{heroItem.readTimeMinutes} menit baca</span>
+                    <span className="text-slate-300 hidden xs:inline">•</span>
+                    <span className="text-slate-500 hidden xs:inline">{heroItem.readTimeMinutes} menit baca</span>
                   </>
                 )}
               </div>

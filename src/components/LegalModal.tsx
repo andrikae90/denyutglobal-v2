@@ -252,7 +252,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
               </div>
 
               {/* 5. Pembaruan Berita */}
-              <div className="p-4 sm:p-5 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2">
+              <div className="p-4 sm:p-5 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-3">
                 <div className="flex items-center gap-2.5">
                   <span className="w-6 h-6 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shrink-0">
                     5
@@ -261,13 +261,16 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                     Pembaruan Berita
                   </h2>
                 </div>
-                <div className="pl-8 space-y-2 text-slate-700">
+                <div className="pl-8 space-y-2.5 text-slate-700">
                   <p>Jika terdapat perkembangan baru terhadap suatu peristiwa, artikel dapat diperbarui.</p>
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs font-mono text-slate-800">
                     Tampilkan: <span className="font-bold text-blue-700">Diperbarui pada: [tanggal dan waktu]</span>
                   </div>
                   <p>
                     Pembaruan harus dibedakan dari informasi yang sudah tersedia ketika artikel pertama kali diterbitkan.
+                  </p>
+                  <p className="text-rose-700 font-medium pt-1">
+                    Jangan mengubah tanggal publikasi awal hanya untuk membuat artikel lama terlihat sebagai berita baru.
                   </p>
                 </div>
               </div>
@@ -284,15 +287,24 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                 </div>
                 <div className="pl-8 space-y-2.5 text-slate-700">
                   <p>
-                    DenyutGlobal menyediakan mekanisme yang memungkinkan pembaca melaporkan dugaan kesalahan pada setiap artikel melalui tombol/link <strong>Laporkan Koreksi</strong>.
+                    DenyutGlobal menyediakan mekanisme yang memungkinkan pembaca melaporkan dugaan kesalahan faktual pada setiap artikel melalui tombol <strong>“Laporkan Koreksi”</strong>.
                   </p>
-                  <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-950 space-y-1">
-                    <div className="font-bold text-amber-900">Status Saluran Pengajuan:</div>
-                    <p className="leading-relaxed">
-                      Saluran pengajuan koreksi akan tersedia setelah kontak redaksi resmi diaktifkan.
-                    </p>
-                    <p className="text-[11px] text-amber-800 italic pt-0.5">
-                      Sesuai standar integritas, DenyutGlobal tidak membuat alamat surel atau kontak fiktif.
+                  <p>
+                    Pembaca dapat menyampaikan laporan dengan menjelaskan bagian informasi yang dianggap tidak akurat serta memberikan sumber atau bukti pendukung jika tersedia.
+                  </p>
+                  <p>
+                    Laporan koreksi akan diterima oleh redaksi untuk diperiksa. Pengiriman laporan tidak berarti bahwa informasi yang dilaporkan otomatis dianggap salah atau bahwa koreksi otomatis akan dilakukan.
+                  </p>
+                  <p>
+                    DenyutGlobal akan memeriksa laporan berdasarkan bukti, sumber yang relevan, tanggal informasi, konteks, dan informasi pendukung lainnya sebelum menentukan tindakan editorial.
+                  </p>
+                  <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-950 space-y-1">
+                    <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Saluran Pelaporan Resmi Aktif</span>
+                    </div>
+                    <p className="leading-relaxed text-emerald-900">
+                      DenyutGlobal tidak membuat alamat surel, kontak, atau saluran pengaduan fiktif. Pengajuan koreksi dilakukan melalui mekanisme pelaporan yang tersedia pada artikel.
                     </p>
                   </div>
                 </div>
@@ -1130,6 +1142,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                           name: contactName.trim(),
                           email: contactEmail.trim(),
                           subject: contactSubject,
+                          report_type: contactSubject === 'Laporan koreksi' ? 'Laporan koreksi' : 'Kontak redaksi',
                           message: contactMessage.trim()
                         })
                       });

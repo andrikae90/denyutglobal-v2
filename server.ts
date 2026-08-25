@@ -9,11 +9,60 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
+import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 
 // =====================================================================
 // DENYUTGLOBAL V2 - SERVER ARTICLE PERSISTENCE ADAPTER (D1 / SQL COMPATIBLE)
 // =====================================================================
 const DB_STORAGE_FILE = path.join(process.cwd(), 'data_articles_server.json');
+const SUBSCRIBERS_STORAGE_FILE = path.join(process.cwd(), 'data_subscribers_server.json');
+
+interface ServerSubscriber {
+  id: string;
+  email: string;
+  status: 'pending' | 'active' | 'unsubscribed';
+  subscribed_at: string;
+  created_at?: string;
+  verification_token?: string;
+  verified_at?: string;
+  unsubscribe_token?: string;
+  unsubscribed_at?: string;
+}
+
+interface NewsletterDeliveryLog {
+  id: string;
+  article_id: string;
+  subscriber_id: string;
+  email: string;
+  status: 'pending' | 'sent' | 'failed' | 'bounced';
+  sent_at: string;
+  provider_message_id?: string;
+  error_message?: string;
+  created_at?: string;
+}
+
+function loadServerSubscribers(): ServerSubscriber[] {
+  try {
+    if (fs.existsSync(SUBSCRIBERS_STORAGE_FILE)) {
+      const raw = fs.readFileSync(SUBSCRIBERS_STORAGE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not read subscribers storage file:', e);
+  }
+  return [];
+}
+
+function saveServerSubscribers(list: ServerSubscriber[]): boolean {
+  try {
+    fs.writeFileSync(SUBSCRIBERS_STORAGE_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('Error saving subscribers to server storage:', e);
+    return false;
+  }
+}
 
 // In-Memory Cache synced with disk / D1 adapter
 let serverArticles: NewsItem[] = [];
@@ -747,32 +796,135 @@ async function startServer() {
 
       const id = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const nowIso = new Date().toISOString();
+      const verificationToken = `vtok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+      const unsubscribeToken = `unstok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
 
-      // Pastikan tabel ada di D1 (jika terkoneksi D1)
+      // 1. Cek penyimpanan lokal server
+      const localSubscribers = loadServerSubscribers();
+      const existingLocal = localSubscribers.find(s => s.email.toLowerCase() === normalizedEmail);
+
+      if (existingLocal) {
+        if (existingLocal.status === 'unsubscribed') {
+          // Re-activate subscriber if previously unsubscribed
+          existingLocal.status = 'active';
+          existingLocal.subscribed_at = nowIso;
+          if (!existingLocal.unsubscribe_token) existingLocal.unsubscribe_token = unsubscribeToken;
+          saveServerSubscribers(localSubscribers);
+        }
+        return res.status(200).json({
+          success: true,
+          isAlreadySubscribed: true,
+          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+        });
+      }
+
+      // 2. Cek dan simpan ke Cloudflare D1 (jika terkoneksi)
+      let alreadyInD1 = false;
       try {
         await executeD1Query(
           `CREATE TABLE IF NOT EXISTS subscribers (
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL UNIQUE,
+            status TEXT DEFAULT 'active',
             subscribed_at TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            verification_token TEXT,
+            verified_at TEXT,
+            unsubscribe_token TEXT,
+            unsubscribed_at TEXT
           );`,
           [],
           req
         );
 
+        // Safe alter migrations for existing databases
+        await executeD1Query(`ALTER TABLE subscribers ADD COLUMN status TEXT DEFAULT 'active';`, [], req).catch(() => {});
+        await executeD1Query(`ALTER TABLE subscribers ADD COLUMN verification_token TEXT;`, [], req).catch(() => {});
+        await executeD1Query(`ALTER TABLE subscribers ADD COLUMN verified_at TEXT;`, [], req).catch(() => {});
+        await executeD1Query(`ALTER TABLE subscribers ADD COLUMN unsubscribe_token TEXT;`, [], req).catch(() => {});
+        await executeD1Query(`ALTER TABLE subscribers ADD COLUMN unsubscribed_at TEXT;`, [], req).catch(() => {});
+
+        // Log table for newsletter deliveries
         await executeD1Query(
-          `INSERT INTO subscribers (id, email, subscribed_at) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
-          [id, normalizedEmail, nowIso],
+          `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
+            id TEXT PRIMARY KEY,
+            article_id TEXT NOT NULL,
+            subscriber_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sent_at TEXT NOT NULL,
+            provider_message_id TEXT,
+            error_message TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+          );`,
+          [],
           req
         );
+        await executeD1Query(`CREATE INDEX IF NOT EXISTS idx_deliveries_art_sub ON newsletter_deliveries(article_id, subscriber_id);`, [], req).catch(() => {});
+
+        const checkRes = await executeD1Query(
+          `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
+          [normalizedEmail],
+          req
+        );
+
+        if (checkRes.success && Array.isArray(checkRes.results) && checkRes.results.length > 0) {
+          alreadyInD1 = true;
+          const currentRec: any = checkRes.results[0];
+          if (currentRec.status === 'unsubscribed') {
+            await executeD1Query(
+              `UPDATE subscribers SET status = 'active', subscribed_at = ? WHERE email = ?;`,
+              [nowIso, normalizedEmail],
+              req
+            );
+          }
+        } else {
+          await executeD1Query(
+            `INSERT INTO subscribers (id, email, status, subscribed_at, verification_token, unsubscribe_token) VALUES (?, ?, 'active', ?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
+            [id, normalizedEmail, nowIso, verificationToken, unsubscribeToken],
+            req
+          );
+        }
       } catch (d1Err) {
         console.warn('D1 subscribe save warning (proceeding with confirmation):', d1Err);
       }
 
+      if (alreadyInD1) {
+        // Catat juga ke server local file agar sinkron
+        localSubscribers.push({ 
+          id, 
+          email: normalizedEmail, 
+          status: 'active',
+          subscribed_at: nowIso, 
+          created_at: nowIso,
+          verification_token: verificationToken,
+          unsubscribe_token: unsubscribeToken
+        });
+        saveServerSubscribers(localSubscribers);
+
+        return res.status(200).json({
+          success: true,
+          isAlreadySubscribed: true,
+          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+        });
+      }
+
+      // 3. Simpan ke local file server
+      localSubscribers.push({
+        id,
+        email: normalizedEmail,
+        status: 'active',
+        subscribed_at: nowIso,
+        created_at: nowIso,
+        verification_token: verificationToken,
+        unsubscribe_token: unsubscribeToken
+      });
+      saveServerSubscribers(localSubscribers);
+
       return res.status(200).json({
         success: true,
-        message: 'Terima kasih! Anda telah berhasil berlangganan Daily Brief DenyutGlobal.'
+        isAlreadySubscribed: false,
+        message: 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
       });
     } catch (err: any) {
       console.error('Server subscribe error:', err);
@@ -780,6 +932,190 @@ async function startServer() {
         success: false,
         error: 'Terjadi gangguan saat memproses pendaftaran.'
       });
+    }
+  });
+
+  // 1D. ENDPOINT UNSUBSCRIBE NEWSLETTER (GET/POST /api/unsubscribe)
+  app.all('/api/unsubscribe', async (req, res) => {
+    try {
+      const token = (req.query.token as string) || (req.body?.token as string) || '';
+      const email = (req.query.email as string) || (req.body?.email as string) || '';
+      const cleanToken = token.trim();
+      const cleanEmail = email.trim().toLowerCase();
+
+      if (!cleanToken && !cleanEmail) {
+        if (req.method === 'GET') {
+          return res.status(400).send(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head><meta charset="utf-8"><title>Batal Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+            <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+                <h2 style="margin:0 0 12px 0;color:#f43f5e;">Permintaan Tidak Valid</h2>
+                <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Tautan berhenti berlangganan tidak lengkap atau token tidak ditemukan.</p>
+                <a href="/" style="display:inline-block;margin-top:16px;background:#f43f5e;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+              </div>
+            </body>
+            </html>
+          `);
+        }
+        return res.status(400).json({ success: false, error: 'Token atau email diperlukan.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      let updated = false;
+
+      // Update in server local store
+      const localSubscribers = loadServerSubscribers();
+      for (const sub of localSubscribers) {
+        if ((cleanToken && sub.unsubscribe_token === cleanToken) || (cleanEmail && sub.email.toLowerCase() === cleanEmail)) {
+          sub.status = 'unsubscribed';
+          sub.unsubscribed_at = nowIso;
+          updated = true;
+        }
+      }
+      if (updated) {
+        saveServerSubscribers(localSubscribers);
+      }
+
+      // Update in D1
+      try {
+        if (cleanToken) {
+          await executeD1Query(
+            `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE unsubscribe_token = ?;`,
+            [nowIso, cleanToken],
+            req
+          );
+        } else if (cleanEmail) {
+          await executeD1Query(
+            `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE email = ?;`,
+            [nowIso, cleanEmail],
+            req
+          );
+        }
+      } catch (d1Err) {
+        console.warn('D1 unsubscribe warning:', d1Err);
+      }
+
+      if (req.method === 'GET') {
+        return res.status(200).send(`
+          <!DOCTYPE html>
+          <html lang="id">
+          <head><meta charset="utf-8"><title>Berhenti Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+          <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+            <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+              <div style="font-size:40px;margin-bottom:8px;">✓</div>
+              <h2 style="margin:0 0 12px 0;color:#38bdf8;">Berhasil Berhenti Berlangganan</h2>
+              <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Alamat email Anda telah dinonaktifkan dari daftar pengiriman Daily Brief & Newsletter DenyutGlobal.</p>
+              <p style="color:#64748b;font-size:12px;margin-top:12px;">Anda dapat mendaftar kembali kapan saja melalui halaman utama kami.</p>
+              <a href="/" style="display:inline-block;margin-top:20px;background:#38bdf8;color:#0f172a;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;">Kembali ke DenyutGlobal</a>
+            </div>
+          </body>
+          </html>
+        `);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Email berhasil dinonaktifkan dari daftar langganan DenyutGlobal.'
+      });
+    } catch (err: any) {
+      console.error('Unsubscribe error:', err);
+      return res.status(500).json({ success: false, error: 'Terjadi gangguan saat memproses permintaan.' });
+    }
+  });
+
+  // 1E. ENDPOINT VERIFIKASI DOUBLE OPT-IN (GET /api/verify-subscription)
+  app.get('/api/verify-subscription', async (req, res) => {
+    try {
+      const token = ((req.query.token as string) || '').trim();
+      const email = ((req.query.email as string) || '').trim().toLowerCase();
+
+      if (!token) {
+        return res.status(400).send(`
+          <!DOCTYPE html>
+          <html lang="id">
+          <head><meta charset="utf-8"><title>Verifikasi Gagal - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+          <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+            <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+              <h2 style="margin:0 0 12px 0;color:#f43f5e;">Token Verifikasi Tidak Ditemukan</h2>
+              <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Tautan konfirmasi tidak valid atau telah kedaluwarsa. Silakan lakukan pendaftaran ulang dari beranda.</p>
+              <a href="/" style="display:inline-block;margin-top:16px;background:#f43f5e;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+            </div>
+          </body>
+          </html>
+        `);
+      }
+
+      const nowIso = new Date().toISOString();
+      let verified = false;
+
+      // Update in server local store
+      const localSubscribers = loadServerSubscribers();
+      for (const sub of localSubscribers) {
+        if (sub.verification_token === token || (email && sub.email.toLowerCase() === email)) {
+          sub.status = 'active';
+          sub.verified_at = nowIso;
+          verified = true;
+        }
+      }
+      if (verified) {
+        saveServerSubscribers(localSubscribers);
+      }
+
+      // Update in D1
+      try {
+        await executeD1Query(
+          `UPDATE subscribers SET status = 'active', verified_at = ? WHERE verification_token = ?;`,
+          [nowIso, token],
+          req
+        );
+        verified = true;
+      } catch (d1Err) {
+        console.warn('D1 verify warning:', d1Err);
+      }
+
+      return res.status(200).send(`
+        <!DOCTYPE html>
+        <html lang="id">
+        <head><meta charset="utf-8"><title>Langganan Terverifikasi - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+        <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+          <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+            <div style="font-size:40px;margin-bottom:8px;">✓</div>
+            <h2 style="margin:0 0 12px 0;color:#10b981;">Langganan Berhasil Dikonfirmasi!</h2>
+            <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Terima kasih. Alamat email Anda telah aktif dan siap menerima Daily Brief & Berita Terkini DenyutGlobal.</p>
+            <a href="/" style="display:inline-block;margin-top:20px;background:#10b981;color:#0f172a;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;">Mulai Membaca Berita</a>
+          </div>
+        </body>
+        </html>
+      `);
+    } catch (err: any) {
+      console.error('Verify subscription error:', err);
+      return res.status(500).json({ success: false, error: 'Gagal memproses verifikasi.' });
+    }
+  });
+
+  // 1F. ENDPOINT WEBHOOK RESEND (POST /api/webhooks/resend)
+  app.post('/api/webhooks/resend', async (req, res) => {
+    try {
+      const event = req.body;
+      // Resend webhook event structure: { type: 'email.delivered' | 'email.bounced' | 'email.complained', data: { ... } }
+      if (event?.type && event?.data?.email) {
+        const targetEmail = event.data.email.toLowerCase();
+        if (event.type === 'email.bounced' || event.type === 'email.complained') {
+          const localSubscribers = loadServerSubscribers();
+          for (const sub of localSubscribers) {
+            if (sub.email.toLowerCase() === targetEmail) {
+              sub.status = 'unsubscribed';
+              sub.unsubscribed_at = new Date().toISOString();
+            }
+          }
+          saveServerSubscribers(localSubscribers);
+        }
+      }
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      return res.status(200).json({ received: true });
     }
   });
 

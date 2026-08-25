@@ -22,8 +22,9 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
   onOpenLegalModal
 }) => {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -40,17 +41,23 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
     }
 
     if (!validateEmail(trimmedEmail)) {
-      setErrorMessage('Masukkan alamat email yang valid.');
+      setErrorMessage('Silakan masukkan alamat email yang valid.');
       return;
     }
 
     setStatus('loading');
 
-    // 2. Kirim permintaan langganan ke API backend / D1
+    // 2. Kirim permintaan langganan ke API backend / D1 / service
     const result = await subscribeNewsletter(trimmedEmail);
 
     if (result.success) {
-      setStatus('success');
+      if (result.isAlreadySubscribed) {
+        setStatus('already_subscribed');
+        setFeedbackMessage(result.message || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.');
+      } else {
+        setStatus('success');
+        setFeedbackMessage(result.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.');
+      }
     } else {
       setStatus('error');
       setErrorMessage(result.error || 'Pendaftaran belum berhasil. Silakan coba lagi.');
@@ -61,6 +68,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
     setEmail('');
     setStatus('idle');
     setErrorMessage(null);
+    setFeedbackMessage('');
   };
 
   return (
@@ -74,6 +82,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
         className="bg-white rounded-2xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 relative my-8 text-left animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-labelledby="subscription-modal-title"
       >
         {/* Close Button */}
@@ -100,15 +109,15 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
         {/* Success View */}
         {status === 'success' ? (
-          <div id="subscription-success-view" className="space-y-4 py-2">
+          <div id="subscription-success-view" className="space-y-4 py-2" role="status" aria-live="polite">
             <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-3 text-emerald-950">
               <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <h4 className="text-base font-bold text-emerald-900">
-                  ✓ Terima kasih!
+                  ✓ Berhasil Terdaftar
                 </h4>
                 <p className="text-xs sm:text-sm text-emerald-800 leading-relaxed">
-                  Alamat email Anda berhasil didaftarkan untuk menerima Daily Brief DenyutGlobal.
+                  {feedbackMessage || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'}
                 </p>
               </div>
             </div>
@@ -135,6 +144,43 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
               </button>
             </div>
           </div>
+        ) : status === 'already_subscribed' ? (
+          /* Already Subscribed View */
+          <div id="subscription-already-subscribed-view" className="space-y-4 py-2" role="status" aria-live="polite">
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3 text-blue-950">
+              <CheckCircle2 className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h4 className="text-base font-bold text-blue-900">
+                  Status Langganan Aktif
+                </h4>
+                <p className="text-xs sm:text-sm text-blue-800 leading-relaxed">
+                  {feedbackMessage || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Alamat email Anda sudah aktif di sistem kami dan akan terus menerima pembaruan Daily Brief tanpa tindakan tambahan.
+            </p>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="text-xs text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+              >
+                Daftarkan email lain
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer shadow-xs"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
         ) : (
           /* Form Registration View */
           <div className="space-y-4">
@@ -154,6 +200,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
             {errorMessage && (
               <div 
                 id="subscription-error-box"
+                role="alert"
                 className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5 animate-in fade-in duration-150"
               >
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -173,6 +220,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                   <input
                     id="subscription-email-input"
                     type="email"
+                    name="email"
                     value={email}
                     onChange={(e) => {
                       setEmail(e.target.value);
@@ -180,6 +228,9 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                     }}
                     placeholder="Masukkan alamat email Anda"
                     disabled={status === 'loading'}
+                    aria-label="Alamat Email"
+                    aria-required="true"
+                    aria-invalid={Boolean(errorMessage)}
                     className="w-full text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl p-3 pr-10 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-rose-600 focus:ring-2 focus:ring-rose-500/20 focus:outline-hidden transition duration-150"
                     autoFocus
                   />

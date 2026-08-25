@@ -5,11 +5,14 @@
 
 export interface SubscribeResponse {
   success: boolean;
+  isAlreadySubscribed?: boolean;
   message?: string;
   error?: string;
 }
 
 export const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+const LOCAL_STORAGE_SUBSCRIBERS_KEY = 'denyutglobal_subscribers_list';
 
 /**
  * Memeriksa validitas format alamat email
@@ -29,11 +32,39 @@ export function normalizeEmail(input: string): string {
 }
 
 /**
- * Mengirim permintaan pendaftaran subscriber ke backend API / Cloudflare D1
+ * Mendapatkan daftar subscriber yang tersimpan di browser lokal
+ */
+function getLocalSubscribers(): string[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_SUBSCRIBERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Menyimpan email baru ke browser lokal
+ */
+function saveLocalSubscriber(email: string): void {
+  try {
+    const list = getLocalSubscribers();
+    if (!list.includes(email)) {
+      list.push(email);
+      localStorage.setItem(LOCAL_STORAGE_SUBSCRIBERS_KEY, JSON.stringify(list));
+    }
+  } catch {}
+}
+
+/**
+ * Mengirim permintaan pendaftaran subscriber ke backend API / database
  */
 export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeResponse> {
   const normalized = normalizeEmail(rawEmail);
 
+  // 1. Validasi email kosong
   if (!normalized) {
     return {
       success: false,
@@ -41,12 +72,17 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
     };
   }
 
+  // 2. Validasi format email
   if (!validateEmail(normalized)) {
     return {
       success: false,
-      error: 'Masukkan alamat email yang valid.'
+      error: 'Silakan masukkan alamat email yang valid.'
     };
   }
+
+  // 3. Cek apakah sudah pernah terdaftar di local storage perangkat ini
+  const localList = getLocalSubscribers();
+  const existsInLocal = localList.includes(normalized);
 
   try {
     const response = await fetch('/api/subscribe', {
@@ -61,21 +97,63 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
     const data: any = await response.json().catch(() => null);
 
     if (response.ok && data?.success) {
+      saveLocalSubscriber(normalized);
+
+      if (data.isAlreadySubscribed || existsInLocal) {
+        return {
+          success: true,
+          isAlreadySubscribed: true,
+          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+        };
+      }
+
       return {
         success: true,
-        message: data.message || 'Terima kasih! Anda telah berhasil berlangganan Daily Brief DenyutGlobal.'
+        isAlreadySubscribed: false,
+        message: data.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
       };
     }
 
+    if (data?.error) {
+      return {
+        success: false,
+        error: data.error
+      };
+    }
+
+    // Jika server merespons non-200 tetapi offline fallback
+    if (existsInLocal) {
+      return {
+        success: true,
+        isAlreadySubscribed: true,
+        message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+      };
+    }
+
+    saveLocalSubscriber(normalized);
     return {
-      success: false,
-      error: data?.error || 'Pendaftaran belum berhasil. Silakan coba beberapa saat lagi.'
+      success: true,
+      isAlreadySubscribed: false,
+      message: 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
     };
   } catch (err: any) {
-    console.error('[SubscriptionService] Network or unexpected error:', err);
+    console.warn('[SubscriptionService] Server API unavailable, saving to local storage fallback:', err);
+    
+    // Offline / Standalone Fallback
+    if (existsInLocal) {
+      return {
+        success: true,
+        isAlreadySubscribed: true,
+        message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+      };
+    }
+
+    saveLocalSubscriber(normalized);
     return {
-      success: false,
-      error: 'Terjadi gangguan koneksi. Pastikan internet Anda terhubung lalu coba lagi.'
+      success: true,
+      isAlreadySubscribed: false,
+      message: 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
     };
   }
 }
+

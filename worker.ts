@@ -2,6 +2,7 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
+import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 
 export interface WorkerD1PreparedStatement {
   bind(...values: any[]): WorkerD1PreparedStatement;
@@ -32,6 +33,9 @@ export interface Env {
   EDITORIAL_SECRET_KEY?: string;
   EDITORIAL_PASSPHRASE_SHA256_HASH?: string;
   APP_URL?: string;
+  RESEND_API_KEY?: string;
+  NEWSLETTER_EMAIL_ENABLED?: string;
+  EMAIL_FROM?: string;
   [key: string]: any;
 }
 
@@ -574,6 +578,8 @@ export default {
 
         const id = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
         const nowIso = new Date().toISOString();
+        const verificationToken = `vtok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+        const unsubscribeToken = `unstok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
 
         if (env.DB) {
           // Pastikan tabel subscribers ada
@@ -582,16 +588,68 @@ export default {
             `CREATE TABLE IF NOT EXISTS subscribers (
               id TEXT PRIMARY KEY,
               email TEXT NOT NULL UNIQUE,
+              status TEXT DEFAULT 'active',
               subscribed_at TEXT NOT NULL,
+              created_at TEXT DEFAULT (datetime('now')),
+              verification_token TEXT,
+              verified_at TEXT,
+              unsubscribe_token TEXT,
+              unsubscribed_at TEXT
+            );`
+          );
+
+          // Safe migration alter for existing DBs
+          await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN status TEXT DEFAULT 'active';`).catch(() => {});
+          await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN verification_token TEXT;`).catch(() => {});
+          await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN verified_at TEXT;`).catch(() => {});
+          await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN unsubscribe_token TEXT;`).catch(() => {});
+          await executeWorkerD1Query(env.DB, `ALTER TABLE subscribers ADD COLUMN unsubscribed_at TEXT;`).catch(() => {});
+
+          // Pastikan tabel delivery log ada
+          await executeWorkerD1Query(
+            env.DB,
+            `CREATE TABLE IF NOT EXISTS newsletter_deliveries (
+              id TEXT PRIMARY KEY,
+              article_id TEXT NOT NULL,
+              subscriber_id TEXT NOT NULL,
+              email TEXT NOT NULL,
+              status TEXT NOT NULL,
+              sent_at TEXT NOT NULL,
+              provider_message_id TEXT,
+              error_message TEXT,
               created_at TEXT DEFAULT (datetime('now'))
             );`
           );
+          await executeWorkerD1Query(env.DB, `CREATE INDEX IF NOT EXISTS idx_deliveries_art_sub ON newsletter_deliveries(article_id, subscriber_id);`).catch(() => {});
+
+          // Cek apakah email sudah terdaftar sebelumnya
+          const checkRes = await executeWorkerD1Query(
+            env.DB,
+            `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
+            [normalizedEmail]
+          );
+
+          if (checkRes.success && Array.isArray(checkRes.results) && checkRes.results.length > 0) {
+            const currentRec: any = checkRes.results[0];
+            if (currentRec.status === 'unsubscribed') {
+              await executeWorkerD1Query(
+                env.DB,
+                `UPDATE subscribers SET status = 'active', subscribed_at = ? WHERE email = ?;`,
+                [nowIso, normalizedEmail]
+              );
+            }
+            return jsonResponse({
+              success: true,
+              isAlreadySubscribed: true,
+              message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+            });
+          }
 
           // Insert aman dengan prepared statement & on conflict do nothing
           const insertRes = await executeWorkerD1Query(
             env.DB,
-            `INSERT INTO subscribers (id, email, subscribed_at) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
-            [id, normalizedEmail, nowIso]
+            `INSERT INTO subscribers (id, email, status, subscribed_at, verification_token, unsubscribe_token) VALUES (?, ?, 'active', ?, ?, ?) ON CONFLICT(email) DO NOTHING;`,
+            [id, normalizedEmail, nowIso, verificationToken, unsubscribeToken]
           );
 
           if (!insertRes.success) {
@@ -601,7 +659,8 @@ export default {
 
         return jsonResponse({
           success: true,
-          message: 'Terima kasih! Anda telah berhasil berlangganan Daily Brief DenyutGlobal.'
+          isAlreadySubscribed: false,
+          message: 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
         });
       } catch (err: any) {
         console.error('Worker subscribe error:', err);
@@ -609,6 +668,157 @@ export default {
           success: false,
           error: 'Terjadi gangguan saat memproses pendaftaran.'
         }, 500);
+      }
+    }
+
+    // 5.6 UNSUBSCRIBE NEWSLETTER (GET/POST /api/unsubscribe)
+    if (pathname === '/api/unsubscribe') {
+      try {
+        const urlObj = new URL(request.url);
+        let token = urlObj.searchParams.get('token') || '';
+        let email = urlObj.searchParams.get('email') || '';
+
+        if (method === 'POST') {
+          const body: any = await request.json().catch(() => ({}));
+          if (body?.token) token = body.token;
+          if (body?.email) email = body.email;
+        }
+
+        const cleanToken = token.trim();
+        const cleanEmail = email.trim().toLowerCase();
+
+        if (!cleanToken && !cleanEmail) {
+          if (method === 'GET') {
+            return new Response(`
+              <!DOCTYPE html>
+              <html lang="id">
+              <head><meta charset="utf-8"><title>Batal Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+              <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+                <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+                  <h2 style="margin:0 0 12px 0;color:#f43f5e;">Permintaan Tidak Valid</h2>
+                  <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Tautan berhenti berlangganan tidak lengkap atau token tidak ditemukan.</p>
+                  <a href="/" style="display:inline-block;margin-top:16px;background:#f43f5e;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+                </div>
+              </body>
+              </html>
+            `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+          }
+          return jsonResponse({ success: false, error: 'Token atau email diperlukan.' }, 400);
+        }
+
+        const nowIso = new Date().toISOString();
+        if (env.DB) {
+          if (cleanToken) {
+            await executeWorkerD1Query(
+              env.DB,
+              `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE unsubscribe_token = ?;`,
+              [nowIso, cleanToken]
+            );
+          } else if (cleanEmail) {
+            await executeWorkerD1Query(
+              env.DB,
+              `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE email = ?;`,
+              [nowIso, cleanEmail]
+            );
+          }
+        }
+
+        if (method === 'GET') {
+          return new Response(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head><meta charset="utf-8"><title>Berhenti Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+            <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+                <div style="font-size:40px;margin-bottom:8px;">✓</div>
+                <h2 style="margin:0 0 12px 0;color:#38bdf8;">Berhasil Berhenti Berlangganan</h2>
+                <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Alamat email Anda telah dinonaktifkan dari daftar pengiriman Daily Brief & Newsletter DenyutGlobal.</p>
+                <p style="color:#64748b;font-size:12px;margin-top:12px;">Anda dapat mendaftar kembali kapan saja melalui halaman utama kami.</p>
+                <a href="/" style="display:inline-block;margin-top:20px;background:#38bdf8;color:#0f172a;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;">Kembali ke DenyutGlobal</a>
+              </div>
+            </body>
+            </html>
+          `, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        }
+
+        return jsonResponse({
+          success: true,
+          message: 'Email berhasil dinonaktifkan dari daftar langganan DenyutGlobal.'
+        });
+      } catch (err: any) {
+        console.error('Worker unsubscribe error:', err);
+        return jsonResponse({ success: false, error: 'Terjadi gangguan saat memproses permintaan.' }, 500);
+      }
+    }
+
+    // 5.7 DOUBLE OPT-IN VERIFICATION (GET /api/verify-subscription)
+    if (pathname === '/api/verify-subscription' && method === 'GET') {
+      try {
+        const urlObj = new URL(request.url);
+        const token = (urlObj.searchParams.get('token') || '').trim();
+
+        if (!token) {
+          return new Response(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head><meta charset="utf-8"><title>Verifikasi Gagal - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+            <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+                <h2 style="margin:0 0 12px 0;color:#f43f5e;">Token Verifikasi Tidak Ditemukan</h2>
+                <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Tautan konfirmasi tidak valid atau telah kedaluwarsa. Silakan lakukan pendaftaran ulang dari beranda.</p>
+                <a href="/" style="display:inline-block;margin-top:16px;background:#f43f5e;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+              </div>
+            </body>
+            </html>
+          `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        }
+
+        const nowIso = new Date().toISOString();
+        if (env.DB) {
+          await executeWorkerD1Query(
+            env.DB,
+            `UPDATE subscribers SET status = 'active', verified_at = ? WHERE verification_token = ?;`,
+            [nowIso, token]
+          );
+        }
+
+        return new Response(`
+          <!DOCTYPE html>
+          <html lang="id">
+          <head><meta charset="utf-8"><title>Langganan Terverifikasi - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+          <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+            <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
+              <div style="font-size:40px;margin-bottom:8px;">✓</div>
+              <h2 style="margin:0 0 12px 0;color:#10b981;">Langganan Berhasil Dikonfirmasi!</h2>
+              <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Terima kasih. Alamat email Anda telah aktif dan siap menerima Daily Brief & Berita Terkini DenyutGlobal.</p>
+              <a href="/" style="display:inline-block;margin-top:20px;background:#10b981;color:#0f172a;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;">Mulai Membaca Berita</a>
+            </div>
+          </body>
+          </html>
+        `, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      } catch (err: any) {
+        console.error('Worker verify subscription error:', err);
+        return jsonResponse({ success: false, error: 'Gagal memproses verifikasi.' }, 500);
+      }
+    }
+
+    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
+    if (pathname === '/api/webhooks/resend' && method === 'POST') {
+      try {
+        const body: any = await request.json().catch(() => ({}));
+        if (body?.type && body?.data?.email && env.DB) {
+          const targetEmail = body.data.email.toLowerCase();
+          if (body.type === 'email.bounced' || body.type === 'email.complained') {
+            await executeWorkerD1Query(
+              env.DB,
+              `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = datetime('now') WHERE email = ?;`,
+              [targetEmail]
+            );
+          }
+        }
+        return jsonResponse({ received: true });
+      } catch (e) {
+        return jsonResponse({ received: true });
       }
     }
 
@@ -1214,5 +1424,21 @@ Kembalikan HANYA format JSON valid:
 
     // Default 404 for unknown endpoints
     return new Response('Not Found', { status: 404 });
+  },
+
+  /**
+   * Cloudflare Scheduled Event Handler (Daily Brief / Newsletter Cron)
+   * Dilengkapi SAFE MODE: Tidak mengirim email nyata jika NEWSLETTER_EMAIL_ENABLED !== 'true'
+   */
+  async scheduled(controller: { cron: string; scheduledTime: number }, env: Env, ctx: WorkerExecutionContext): Promise<void> {
+    console.log(`[Worker Cron] Scheduled event triggered: ${controller.cron} at ${new Date(controller.scheduledTime).toISOString()}`);
+    
+    // SAFE MODE: Jangan kirim email jika email sending dinonaktifkan
+    if (env.NEWSLETTER_EMAIL_ENABLED !== 'true' || !env.RESEND_API_KEY) {
+      console.log('[Worker Cron] Newsletter email sending is currently DISABLED or RESEND_API_KEY not configured. Dry-run mode only.');
+      return;
+    }
+
+    // Jika di masa depan diaktifkan secara eksplisit, logika blast newsletter dapat dijalankan di sini
   }
 };
