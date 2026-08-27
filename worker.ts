@@ -3,7 +3,7 @@ import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
-import { generateNewsletterEmail } from './src/services/newsletterTemplate';
+import { generateNewsletterEmail, NewsletterArticlePayload } from './src/services/newsletterTemplate';
 
 export interface WorkerD1PreparedStatement {
   bind(...values: any[]): WorkerD1PreparedStatement;
@@ -1464,6 +1464,33 @@ export default {
       }
     }
 
+    // 12.7 EDITORIAL MANUAL NEWSLETTER BROADCAST (POST /api/editorial/newsletter/broadcast)
+    if (pathname === '/api/editorial/newsletter/broadcast' && method === 'POST') {
+      const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
+      if (!await verifyWorkerEditorialToken(authHeader, env)) {
+        return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
+      }
+
+      try {
+        const body: any = await request.json().catch(() => ({}));
+        const forceArticleId = typeof body?.article_id === 'string' ? body.article_id.trim() : undefined;
+        const dryRun = body?.dry_run === true || body?.dryRun === true;
+
+        const broadcastResult = await processDailyNewsletterBroadcast(env, {
+          dryRun,
+          forceArticleId
+        });
+
+        return jsonResponse({
+          success: broadcastResult.success,
+          ...broadcastResult
+        });
+      } catch (err: any) {
+        console.error('Worker editorial broadcast error:', err);
+        return jsonResponse({ success: false, error: 'Gagal menjalankan broadcast newsletter.' }, 500);
+      }
+    }
+
     // 13. AI DRAFT GENERATOR (POST /api/ai/draft)
     if (pathname === '/api/ai/draft' && method === 'POST') {
       try {
@@ -1830,18 +1857,302 @@ Kembalikan HANYA format JSON valid:
   },
 
   /**
-   * Cloudflare Scheduled Event Handler (Daily Brief / Newsletter Cron)
-   * Dilengkapi SAFE MODE: Tidak mengirim email nyata jika NEWSLETTER_EMAIL_ENABLED !== 'true'
+   * Cloudflare Scheduled Event Handler (Daily Brief / Newsletter Cron at 08.00 WIB / 01.00 UTC)
+   * Dilengkapi proteksi:
+   * 1. RESEND_API_KEY check (batal jika tidak ada atau placeholder)
+   * 2. NEWSLETTER_EMAIL_ENABLED check
+   * 3. Hanya artikel dengan status 'published' DAN reviewed = 1
+   * 4. Deduplikasi via newsletter_deliveries (mencegah artikel terkirim 2x ke subscriber yang sama)
+   * 5. Filter status unsubscribe (tidak mengirim ke yang unsubscribed / pending)
+   * 6. Tidak ada pengiriman jika tidak ada artikel baru yang memenuhi syarat
    */
   async scheduled(controller: { cron: string; scheduledTime: number }, env: Env, ctx: WorkerExecutionContext): Promise<void> {
     console.log(`[Worker Cron] Scheduled event triggered: ${controller.cron} at ${new Date(controller.scheduledTime).toISOString()}`);
-    
-    // SAFE MODE: Jangan kirim email jika email sending dinonaktifkan
-    if (env.NEWSLETTER_EMAIL_ENABLED !== 'true' || !env.RESEND_API_KEY) {
-      console.log('[Worker Cron] Newsletter email sending is currently DISABLED or RESEND_API_KEY not configured. Dry-run mode only.');
+
+    // SAFE MODE: Jangan kirim email jika RESEND_API_KEY tidak dikonfigurasi
+    if (!env.RESEND_API_KEY || env.RESEND_API_KEY === 'MY_RESEND_API_KEY') {
+      console.log('[Worker Cron] RESEND_API_KEY is not configured or is a placeholder. Skipping live broadcast.');
+      ctx.waitUntil(processDailyNewsletterBroadcast(env, { dryRun: true }));
       return;
     }
 
-    // Jika di masa depan diaktifkan secara eksplisit, logika blast newsletter dapat dijalankan di sini
+    if (env.NEWSLETTER_EMAIL_ENABLED !== 'true') {
+      console.log('[Worker Cron] NEWSLETTER_EMAIL_ENABLED is not "true". Running in dry-run mode.');
+      ctx.waitUntil(processDailyNewsletterBroadcast(env, { dryRun: true }));
+      return;
+    }
+
+    ctx.waitUntil(processDailyNewsletterBroadcast(env, { dryRun: false }));
   }
 };
+
+/**
+ * Core Automation: Broadcast Daily Newsletter to Active Subscribers
+ * Strictly enforces:
+ * 1. RESEND_API_KEY presence (aborts safely if missing or dummy)
+ * 2. NEWSLETTER_EMAIL_ENABLED setting
+ * 3. Only articles with status = 'published' AND reviewed = 1
+ * 4. Only active subscribers (unsubscribed / pending are excluded)
+ * 5. Deduplication via newsletter_deliveries (UNIQUE(article_id, subscriber_id))
+ * 6. Batching with safe limits and progress logging
+ */
+async function processDailyNewsletterBroadcast(
+  env: Env,
+  options?: { dryRun?: boolean; forceArticleId?: string }
+): Promise<{
+  success: boolean;
+  skipped?: boolean;
+  reason?: string;
+  articleId?: string;
+  articleTitle?: string;
+  targetedCount?: number;
+  sentCount?: number;
+  failedCount?: number;
+  dryRunCount?: number;
+  error?: string;
+}> {
+  const apiKey = (env.RESEND_API_KEY || '').trim();
+  const emailEnabled = (env.NEWSLETTER_EMAIL_ENABLED || 'false').trim().toLowerCase() === 'true';
+  const hasApiKey = Boolean(apiKey && apiKey !== 'MY_RESEND_API_KEY');
+  const isDryRun = Boolean(options?.dryRun || !emailEnabled || !hasApiKey);
+
+  console.log(`[Daily Newsletter] Starting broadcast routine (dryRun: ${isDryRun}, emailEnabled: ${emailEnabled}, hasApiKey: ${hasApiKey})`);
+
+  // Guard 1: RESEND_API_KEY Check
+  if (!hasApiKey && !options?.dryRun) {
+    console.log('[Daily Newsletter] Broadcast skipped: RESEND_API_KEY is not configured.');
+    return {
+      success: false,
+      skipped: true,
+      reason: 'RESEND_API_KEY_MISSING'
+    };
+  }
+
+  // Guard 2: D1 Database Availability
+  if (!env.DB) {
+    console.log('[Daily Newsletter] Broadcast skipped: Cloudflare D1 database (env.DB) is not bound.');
+    return {
+      success: false,
+      skipped: true,
+      reason: 'D1_NOT_BOUND'
+    };
+  }
+
+  // Ensure delivery logs table and indexes exist
+  await ensureNewsletterDeliveriesD1Table(env.DB);
+
+  // Guard 3: Fetch Eligible Articles (status = 'published' AND reviewed = 1)
+  let candidateArticles: any[] = [];
+  try {
+    const artRes = await executeWorkerD1Query(
+      env.DB,
+      `SELECT * FROM articles 
+       WHERE status = 'published' AND (reviewed = 1 OR reviewed = '1')
+       ORDER BY is_daily_brief DESC, published_at DESC, created_at DESC
+       LIMIT 10;`
+    );
+    if (artRes.success && Array.isArray(artRes.results) && artRes.results.length > 0) {
+      candidateArticles = artRes.results;
+    }
+  } catch (err: any) {
+    console.error('[Daily Newsletter] Error querying published articles:', err);
+    return {
+      success: false,
+      error: `Failed to query articles: ${err?.message || String(err)}`
+    };
+  }
+
+  if (candidateArticles.length === 0) {
+    console.log('[Daily Newsletter] No published and reviewed articles found in D1. Skipping newsletter delivery.');
+    return {
+      success: true,
+      skipped: true,
+      reason: 'NO_ELIGIBLE_ARTICLES'
+    };
+  }
+
+  // Guard 4: Fetch Active Subscribers (Exclude unsubscribed and pending)
+  let activeSubscribers: Array<{ id: string; email: string; unsubscribe_token?: string }> = [];
+  try {
+    const subRes = await executeWorkerD1Query(
+      env.DB,
+      `SELECT id, email, unsubscribe_token, status, unsubscribed_at 
+       FROM subscribers 
+       WHERE (status = 'active' OR status IS NULL) 
+         AND (unsubscribed_at IS NULL OR unsubscribed_at = '');`
+    );
+
+    if (subRes.success && Array.isArray(subRes.results)) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      activeSubscribers = (subRes.results as any[])
+        .filter(s => s.status !== 'unsubscribed' && s.status !== 'pending' && !s.unsubscribed_at && s.email && emailRegex.test(s.email.trim()))
+        .map(s => ({
+          id: s.id,
+          email: s.email.trim().toLowerCase(),
+          unsubscribe_token: s.unsubscribe_token || `unstok_${s.id}`
+        }));
+    }
+  } catch (err: any) {
+    console.error('[Daily Newsletter] Error querying subscribers:', err);
+    return {
+      success: false,
+      error: `Failed to query subscribers: ${err?.message || String(err)}`
+    };
+  }
+
+  if (activeSubscribers.length === 0) {
+    console.log('[Daily Newsletter] No active subscribers found in D1. Skipping newsletter delivery.');
+    return {
+      success: true,
+      skipped: true,
+      reason: 'NO_ACTIVE_SUBSCRIBERS'
+    };
+  }
+
+  // Guard 5: Find the best article that still has undelivered active subscribers
+  let selectedArticle: any = null;
+  let recipientsToSend: Array<{ id: string; email: string; unsubscribe_token?: string }> = [];
+
+  if (options?.forceArticleId) {
+    const forced = candidateArticles.find(a => a.id === options.forceArticleId);
+    if (forced) {
+      selectedArticle = forced;
+    }
+  }
+
+  if (selectedArticle) {
+    // Check existing deliveries for this forced article
+    const delivRes = await executeWorkerD1Query(
+      env.DB,
+      `SELECT subscriber_id, email FROM newsletter_deliveries WHERE article_id = ? AND status = 'sent';`,
+      [selectedArticle.id]
+    );
+    const deliveredSubIds = new Set((delivRes.results || []).map((r: any) => r.subscriber_id));
+    const deliveredEmails = new Set((delivRes.results || []).map((r: any) => (r.email || '').toLowerCase()));
+
+    recipientsToSend = activeSubscribers.filter(
+      s => !deliveredSubIds.has(s.id) && !deliveredEmails.has(s.email)
+    );
+  } else {
+    // Scan candidate articles in priority order to find one with pending recipients
+    for (const cand of candidateArticles) {
+      const delivRes = await executeWorkerD1Query(
+        env.DB,
+        `SELECT subscriber_id, email FROM newsletter_deliveries WHERE article_id = ? AND status = 'sent';`,
+        [cand.id]
+      );
+      const deliveredSubIds = new Set((delivRes.results || []).map((r: any) => r.subscriber_id));
+      const deliveredEmails = new Set((delivRes.results || []).map((r: any) => (r.email || '').toLowerCase()));
+
+      const pending = activeSubscribers.filter(
+        s => !deliveredSubIds.has(s.id) && !deliveredEmails.has(s.email)
+      );
+
+      if (pending.length > 0) {
+        selectedArticle = cand;
+        recipientsToSend = pending;
+        break;
+      }
+    }
+  }
+
+  // If all candidate articles have already been sent to all active subscribers
+  if (!selectedArticle || recipientsToSend.length === 0) {
+    const latestArt = candidateArticles[0];
+    console.log(`[Daily Newsletter] All ${candidateArticles.length} recent articles have already been delivered to all active subscribers. Skipping.`);
+    return {
+      success: true,
+      skipped: true,
+      reason: 'ALL_SUBSCRIBERS_ALREADY_DELIVERED',
+      articleId: latestArt?.id,
+      articleTitle: latestArt?.title || latestArt?.judul
+    };
+  }
+
+  const normArticle = normalizeNewsItem(selectedArticle);
+  const articlePayload: NewsletterArticlePayload = {
+    id: normArticle.id,
+    slug: normArticle.slug || normArticle.id,
+    judul: normArticle.title || normArticle.judul || 'DenyutGlobal Daily Brief',
+    ringkasan: normArticle.summary || normArticle.ringkasan || '',
+    kategori: normArticle.categoryLabel || normArticle.category || 'Dunia',
+    namaSumber: normArticle.author || normArticle.namaSumber || 'Redaksi DenyutGlobal',
+    tanggal: normArticle.tanggal || new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+    waktu: normArticle.waktu || '08:00 WIB',
+    readTimeMinutes: normArticle.readTimeMinutes || 3
+  };
+
+  const appBaseUrl = (env.APP_BASE_URL || env.APP_URL || 'https://denyutglobal.my.id').trim();
+  const emailFrom = (env.EMAIL_FROM || 'DenyutGlobal <newsletter@denyutglobal.my.id>').trim();
+
+  console.log(`[Daily Newsletter] Dispatching article "${articlePayload.judul}" (ID: ${articlePayload.id}) to ${recipientsToSend.length} recipients...`);
+
+  // Callback to record delivery in D1 with deduplication
+  const onDeliveryRecord = async (record: {
+    subscriberId: string;
+    email: string;
+    status: 'sent' | 'failed' | 'dry_run';
+    providerMessageId?: string;
+    errorMessage?: string;
+  }) => {
+    if (!env.DB) return;
+    try {
+      const delivId = `deliv-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const nowIso = new Date().toISOString();
+      await executeWorkerD1Query(
+        env.DB,
+        `INSERT INTO newsletter_deliveries (
+          id, article_id, subscriber_id, email, status, sent_at,
+          provider_message_id, error_message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(article_id, subscriber_id) DO UPDATE SET
+          status = excluded.status,
+          sent_at = excluded.sent_at,
+          provider_message_id = excluded.provider_message_id,
+          error_message = excluded.error_message;`,
+        [
+          delivId,
+          normArticle.id,
+          record.subscriberId,
+          record.email.toLowerCase(),
+          record.status,
+          nowIso,
+          record.providerMessageId || null,
+          record.errorMessage || null,
+          nowIso
+        ]
+      );
+    } catch (dErr) {
+      console.warn('[Daily Newsletter] Failed to write delivery record to D1:', dErr);
+    }
+  };
+
+  const recipients = recipientsToSend.map(s => ({
+    id: s.id,
+    email: s.email,
+    unsubscribeToken: s.unsubscribe_token
+  }));
+
+  const batchResult = await sendBatchNewsletter({
+    article: articlePayload,
+    recipients,
+    apiKey,
+    from: emailFrom,
+    appBaseUrl,
+    dryRun: isDryRun,
+    onDeliveryRecord
+  });
+
+  console.log(`[Daily Newsletter] Broadcast completed: targeted=${recipients.length}, sent=${batchResult.totalSent}, failed=${batchResult.totalFailed}, dryRun=${batchResult.totalDryRun}`);
+
+  return {
+    success: batchResult.totalFailed === 0 || batchResult.totalSent > 0,
+    skipped: false,
+    articleId: normArticle.id,
+    articleTitle: normArticle.title || normArticle.judul,
+    targetedCount: recipients.length,
+    sentCount: batchResult.totalSent,
+    failedCount: batchResult.totalFailed,
+    dryRunCount: batchResult.totalDryRun
+  };
+}
