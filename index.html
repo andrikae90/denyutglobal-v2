@@ -12,8 +12,18 @@
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
 
+      try {
+        var isEditorial = /^\/(redaksi|editorial)(\/|$)/i.test(window.location.pathname) ||
+          window.location.search.indexOf('redaksi') !== -1 ||
+          window.location.search.indexOf('editorial') !== -1 ||
+          (window.sessionStorage && window.sessionStorage.getItem('denyutglobal_editorial_session') === 'active');
+        if (isEditorial) {
+          window['ga-disable-G-XX1CWQ3HBG'] = true;
+        }
+      } catch (e) {}
+
+      gtag('js', new Date());
       gtag('config', 'G-XX1CWQ3HBG');
     </script>
     <title>DenyutGlobal — Menangkap Denyut Dunia, Setiap Hari</title>

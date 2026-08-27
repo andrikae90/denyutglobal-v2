@@ -5,6 +5,7 @@ import { newsService } from './services/newsService';
 import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId, updateCanonicalUrl, PRODUCTION_CANONICAL_DOMAIN } from './utils/slug';
 import { updateStructuredData } from './utils/schema';
 import { updateOpenGraphMetadata } from './utils/openGraph';
+import { setEditorialTrackingDisabled } from './utils/analytics';
 import { Navbar } from './components/Navbar';
 import { BreakingTicker } from './components/BreakingTicker';
 import { SampleDataBanner } from './components/SampleDataBanner';
@@ -224,6 +225,7 @@ export default function App() {
     } catch (e) {
       console.error('Failed to set editorial session in sessionStorage', e);
     }
+    setEditorialTrackingDisabled(true);
     setIsEditorialAuthenticated(true);
     setIsAuthModalOpen(false);
     setIsEditorOpen(true);
@@ -248,6 +250,10 @@ export default function App() {
       sessionStorage.removeItem('denyutglobal_editorial_token');
     } catch (e) {
       console.error('Failed to remove editorial session from sessionStorage', e);
+    }
+    const isEditorialPath = typeof window !== 'undefined' && /^\/(redaksi|editorial)(\/|$)/i.test(window.location.pathname);
+    if (!isEditorialPath) {
+      setEditorialTrackingDisabled(false);
     }
     setIsEditorialAuthenticated(false);
     setIsEditorOpen(false);
@@ -290,24 +296,30 @@ export default function App() {
     try {
       const pathname = window.location.pathname.toLowerCase();
       const searchParams = new URLSearchParams(window.location.search);
-      if (
+      const isEditorialUrl = 
         pathname === '/redaksi' || 
         pathname === '/redaksi/' || 
         pathname === '/editorial' || 
         pathname === '/editorial/' ||
         searchParams.has('redaksi') ||
-        searchParams.has('editorial')
-      ) {
+        searchParams.has('editorial');
+
+      if (isEditorialUrl) {
+        setEditorialTrackingDisabled(true);
         if (isEditorialAuthenticated) {
           setIsEditorOpen(true);
         } else {
           setIsAuthModalOpen(true);
         }
+      } else if (isEditorialAuthenticated || isEditorOpen) {
+        setEditorialTrackingDisabled(true);
+      } else {
+        setEditorialTrackingDisabled(false);
       }
     } catch (e) {
       console.warn('URL redaksi route check error:', e);
     }
-  }, [isEditorialAuthenticated]);
+  }, [isEditorialAuthenticated, isEditorOpen]);
 
   // Global keyboard shortcuts (Ctrl+K or / for search, Ctrl+Shift+R for Ruang Redaksi secret shortcut)
   useEffect(() => {

@@ -9,6 +9,7 @@ import {
   Send
 } from 'lucide-react';
 import { subscribeNewsletter, validateEmail } from '../services/subscriptionService';
+import { trackSubscribeEvent } from '../utils/analytics';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -54,9 +55,11 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
       if (result.isAlreadySubscribed) {
         setStatus('already_subscribed');
         setFeedbackMessage(result.message || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.');
+        trackSubscribeEvent('already_subscribed');
       } else {
         setStatus('success');
         setFeedbackMessage(result.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.');
+        trackSubscribeEvent('new');
       }
     } else {
       setStatus('error');

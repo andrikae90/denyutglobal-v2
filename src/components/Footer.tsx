@@ -16,6 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { subscribeNewsletter, validateEmail } from '../services/subscriptionService';
+import { trackSubscribeEvent } from '../utils/analytics';
 
 interface FooterProps {
   onSelectCategory: (category: CategoryId) => void;
@@ -56,9 +57,11 @@ export const Footer: React.FC<FooterProps> = ({
       if (result.isAlreadySubscribed) {
         setStatus('already_subscribed');
         setFeedbackMsg(result.message || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.');
+        trackSubscribeEvent('already_subscribed');
       } else {
         setStatus('success');
         setFeedbackMsg(result.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.');
+        trackSubscribeEvent('new');
       }
       setTimeout(() => {
         setEmail('');
