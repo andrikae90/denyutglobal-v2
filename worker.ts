@@ -715,17 +715,19 @@ export default {
         if (env.DB) {
           const checkRes = await executeWorkerD1Query(
             env.DB,
-            `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
+            `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`,
             [normalizedEmail]
           );
 
           if (checkRes.success && Array.isArray(checkRes.results) && checkRes.results.length > 0) {
-            const status = (checkRes.results[0] as any).status || 'active';
+            const record = checkRes.results[0] as any;
+            const status = record.status || 'active';
             return jsonResponse({
               success: true,
               exists: true,
               status,
-              isSubscribed: status === 'active'
+              isSubscribed: status === 'active',
+              token: status === 'active' ? record.unsubscribe_token : undefined
             });
           }
         }
@@ -758,9 +760,9 @@ export default {
         const cleanToken = token.trim();
         const cleanEmail = email.trim().toLowerCase();
 
-        // Untuk GET (link dari email), token wajib ada dan valid
-        if (method === 'GET') {
-          if (!cleanToken || cleanToken.length < 6) {
+        // Token wajib ada dan valid (minimal 6 karakter) baik untuk GET (email link) maupun POST (UI/API)
+        if (!cleanToken || cleanToken.length < 6) {
+          if (method === 'GET') {
             return new Response(`
               <!DOCTYPE html>
               <html lang="id">
@@ -781,35 +783,23 @@ export default {
               </html>
             `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
           }
-        } else {
-          // Untuk POST, minimal token atau email valid harus ada
-          if (!cleanToken && !cleanEmail) {
-            return jsonResponse({ success: false, error: 'Token atau alamat email berhenti berlangganan diperlukan.' }, 400);
-          }
+          return jsonResponse({ success: false, error: 'Token berhenti berlangganan diperlukan dan harus valid.' }, 400);
         }
 
         let matchedSubscriber: { id: string; email: string; status: string } | null = null;
 
         if (env.DB) {
-          let querySql = '';
-          let queryParams: any[] = [];
+          let querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? LIMIT 1;`;
+          let queryParams: any[] = [cleanToken];
 
-          if (cleanToken && cleanEmail) {
+          if (cleanEmail) {
             querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? AND email = ? LIMIT 1;`;
             queryParams = [cleanToken, cleanEmail];
-          } else if (cleanToken) {
-            querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? LIMIT 1;`;
-            queryParams = [cleanToken];
-          } else if (cleanEmail) {
-            querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`;
-            queryParams = [cleanEmail];
           }
 
-          if (querySql) {
-            const d1Res = await executeWorkerD1Query(env.DB, querySql, queryParams);
-            if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
-              matchedSubscriber = d1Res.results[0] as any;
-            }
+          const d1Res = await executeWorkerD1Query(env.DB, querySql, queryParams);
+          if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
+            matchedSubscriber = d1Res.results[0] as any;
           }
         }
 

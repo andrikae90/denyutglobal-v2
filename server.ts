@@ -835,8 +835,8 @@ async function startServer() {
       // 1. Cek D1 jika aktif
       let d1Record: any = null;
       try {
-        const d1Res = await executeD1Query<{ id: string; email: string; status: string }>(
-          `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
+        const d1Res = await executeD1Query<{ id: string; email: string; status: string; unsubscribe_token?: string }>(
+          `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`,
           [normalizedEmail],
           req
         );
@@ -853,7 +853,8 @@ async function startServer() {
           success: true,
           exists: true,
           status,
-          isSubscribed: status === 'active'
+          isSubscribed: status === 'active',
+          token: status === 'active' ? d1Record.unsubscribe_token : undefined
         });
       }
 
@@ -866,7 +867,8 @@ async function startServer() {
           success: true,
           exists: true,
           status,
-          isSubscribed: status === 'active'
+          isSubscribed: status === 'active',
+          token: status === 'active' ? localSub.unsubscribe_token : undefined
         });
       }
 
@@ -1068,9 +1070,9 @@ async function startServer() {
       const cleanToken = token.trim();
       const cleanEmail = email.trim().toLowerCase();
 
-      // Untuk GET (link dari email), token wajib ada dan valid
-      if (req.method === 'GET') {
-        if (!cleanToken || cleanToken.length < 6) {
+      // Token wajib ada dan valid (minimal 6 karakter) baik untuk GET (email link) maupun POST (UI/API)
+      if (!cleanToken || cleanToken.length < 6) {
+        if (req.method === 'GET') {
           return res.status(400).send(`
             <!DOCTYPE html>
             <html lang="id">
@@ -1091,11 +1093,7 @@ async function startServer() {
             </html>
           `);
         }
-      } else {
-        // Untuk POST, minimal token atau email valid harus ada
-        if (!cleanToken && !cleanEmail) {
-          return res.status(400).json({ success: false, error: 'Token atau alamat email berhenti berlangganan diperlukan.' });
-        }
+        return res.status(400).json({ success: false, error: 'Token berhenti berlangganan diperlukan dan harus valid.' });
       }
 
       // Verifikasi data subscriber di D1 dan local store
@@ -1103,30 +1101,22 @@ async function startServer() {
 
       // 1. Cek di D1
       try {
-        let querySql = '';
-        let queryParams: any[] = [];
+        let querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? LIMIT 1;`;
+        let queryParams: any[] = [cleanToken];
 
-        if (cleanToken && cleanEmail) {
+        if (cleanEmail) {
           querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? AND email = ? LIMIT 1;`;
           queryParams = [cleanToken, cleanEmail];
-        } else if (cleanToken) {
-          querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? LIMIT 1;`;
-          queryParams = [cleanToken];
-        } else if (cleanEmail) {
-          querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`;
-          queryParams = [cleanEmail];
         }
 
-        if (querySql) {
-          const d1Res = await executeD1Query<{ id: string; email: string; status: string }>(
-            querySql,
-            queryParams,
-            req
-          );
+        const d1Res = await executeD1Query<{ id: string; email: string; status: string }>(
+          querySql,
+          queryParams,
+          req
+        );
 
-          if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
-            matchedSubscriber = d1Res.results[0];
-          }
+        if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
+          matchedSubscriber = d1Res.results[0];
         }
       } catch (d1Err) {
         console.warn('D1 unsubscribe check error:', d1Err);
@@ -1136,16 +1126,10 @@ async function startServer() {
       const localSubscribers = loadServerSubscribers();
       if (!matchedSubscriber) {
         const found = localSubscribers.find(s => {
-          if (cleanToken && cleanEmail) {
+          if (cleanEmail) {
             return s.unsubscribe_token === cleanToken && s.email.toLowerCase() === cleanEmail;
           }
-          if (cleanToken) {
-            return s.unsubscribe_token === cleanToken;
-          }
-          if (cleanEmail) {
-            return s.email.toLowerCase() === cleanEmail;
-          }
-          return false;
+          return s.unsubscribe_token === cleanToken;
         });
         if (found) {
           matchedSubscriber = { id: found.id, email: found.email, status: found.status };

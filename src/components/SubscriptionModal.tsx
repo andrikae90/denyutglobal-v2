@@ -34,6 +34,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'unsubscribed_success' | 'error'>('idle');
   const [dbStatus, setDbStatus] = useState<'checking' | 'active' | 'unsubscribed' | 'none' | null>(null);
+  const [unsubscribeToken, setUnsubscribeToken] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string>('');
 
@@ -42,6 +43,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
     const clean = normalizeEmail(email);
     if (!clean || !validateEmail(clean)) {
       setDbStatus(null);
+      setUnsubscribeToken(null);
       return;
     }
 
@@ -51,6 +53,11 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
       const res = await checkSubscriptionStatus(clean);
       if (isMounted) {
         setDbStatus(res.status);
+        if (res.token) {
+          setUnsubscribeToken(res.token);
+        } else {
+          setUnsubscribeToken(null);
+        }
       }
     }, 400);
 
@@ -83,10 +90,23 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
     // Jika pengguna yang aktif memilih untuk berhenti berlangganan
     if (dbStatus === 'active') {
-      const unsubRes = await unsubscribeNewsletter(trimmedEmail, '');
+      let activeToken = unsubscribeToken;
+      if (!activeToken) {
+        const freshStatus = await checkSubscriptionStatus(trimmedEmail);
+        activeToken = freshStatus.token || null;
+      }
+
+      if (!activeToken) {
+        setStatus('error');
+        setErrorMessage('Token berhenti berlangganan tidak ditemukan. Silakan muat ulang halaman atau coba lagi.');
+        return;
+      }
+
+      const unsubRes = await unsubscribeNewsletter(trimmedEmail, activeToken);
       if (unsubRes.success) {
         setStatus('unsubscribed_success');
         setDbStatus('unsubscribed');
+        setUnsubscribeToken(null);
         setFeedbackMessage(unsubRes.message || 'Alamat email Anda telah dinonaktifkan dari daftar pengiriman newsletter DenyutGlobal.');
       } else {
         setStatus('error');
@@ -120,6 +140,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
     setEmail('');
     setStatus('idle');
     setDbStatus(null);
+    setUnsubscribeToken(null);
     setErrorMessage(null);
     setFeedbackMessage('');
   };

@@ -40,6 +40,7 @@ export const Footer: React.FC<FooterProps> = ({
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'unsubscribed_success' | 'error'>('idle');
   const [dbStatus, setDbStatus] = useState<'checking' | 'active' | 'unsubscribed' | 'none' | null>(null);
+  const [unsubscribeToken, setUnsubscribeToken] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string>('');
 
@@ -48,6 +49,7 @@ export const Footer: React.FC<FooterProps> = ({
     const clean = normalizeEmail(email);
     if (!clean || !validateEmail(clean)) {
       setDbStatus(null);
+      setUnsubscribeToken(null);
       return;
     }
 
@@ -57,6 +59,11 @@ export const Footer: React.FC<FooterProps> = ({
       const res = await checkSubscriptionStatus(clean);
       if (isMounted) {
         setDbStatus(res.status);
+        if (res.token) {
+          setUnsubscribeToken(res.token);
+        } else {
+          setUnsubscribeToken(null);
+        }
       }
     }, 400);
 
@@ -85,10 +92,23 @@ export const Footer: React.FC<FooterProps> = ({
 
     // Jika aktif dan klik unsubscribe
     if (dbStatus === 'active') {
-      const unsubRes = await unsubscribeNewsletter(trimmed, '');
+      let activeToken = unsubscribeToken;
+      if (!activeToken) {
+        const freshStatus = await checkSubscriptionStatus(trimmed);
+        activeToken = freshStatus.token || null;
+      }
+
+      if (!activeToken) {
+        setStatus('error');
+        setErrorMsg('Token berhenti berlangganan tidak ditemukan. Silakan muat ulang halaman atau coba lagi.');
+        return;
+      }
+
+      const unsubRes = await unsubscribeNewsletter(trimmed, activeToken);
       if (unsubRes.success) {
         setStatus('unsubscribed_success');
         setDbStatus('unsubscribed');
+        setUnsubscribeToken(null);
         setFeedbackMsg(unsubRes.message || 'Alamat email berhasil dinonaktifkan dari newsletter DenyutGlobal.');
         setTimeout(() => {
           setEmail('');

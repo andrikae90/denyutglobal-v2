@@ -16,6 +16,7 @@ export interface SubscriptionStatusResponse {
   exists: boolean;
   status: 'active' | 'unsubscribed' | 'pending' | 'none';
   isSubscribed: boolean;
+  token?: string;
   error?: string;
 }
 
@@ -119,7 +120,8 @@ export async function checkSubscriptionStatus(rawEmail: string): Promise<Subscri
         success: true,
         exists: Boolean(data.exists),
         status,
-        isSubscribed: Boolean(data.isSubscribed)
+        isSubscribed: Boolean(data.isSubscribed),
+        token: typeof data.token === 'string' ? data.token : undefined
       };
     }
   } catch (err) {
