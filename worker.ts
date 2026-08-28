@@ -722,12 +722,26 @@ export default {
           if (checkRes.success && Array.isArray(checkRes.results) && checkRes.results.length > 0) {
             const record = checkRes.results[0] as any;
             const status = record.status || 'active';
+            let token = record.unsubscribe_token;
+            if (status === 'active' && (!token || typeof token !== 'string' || token.trim().length < 6)) {
+              token = `unstok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+              try {
+                await executeWorkerD1Query(
+                  env.DB,
+                  `UPDATE subscribers SET unsubscribe_token = ? WHERE id = ?;`,
+                  [token, record.id]
+                );
+                record.unsubscribe_token = token;
+              } catch (updateErr) {
+                console.warn('Worker lazy backfill unsubscribe_token error:', updateErr);
+              }
+            }
             return jsonResponse({
               success: true,
               exists: true,
               status,
               isSubscribed: status === 'active',
-              token: status === 'active' ? record.unsubscribe_token : undefined
+              token: status === 'active' ? token : undefined
             });
           }
         }

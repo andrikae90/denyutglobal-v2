@@ -849,12 +849,39 @@ async function startServer() {
 
       if (d1Record) {
         const status = d1Record.status || 'active';
+        let token = d1Record.unsubscribe_token;
+        if (status === 'active' && (!token || typeof token !== 'string' || token.trim().length < 6)) {
+          token = `unstok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+          try {
+            await executeD1Query(
+              `UPDATE subscribers SET unsubscribe_token = ? WHERE id = ?;`,
+              [token, d1Record.id],
+              req
+            );
+            d1Record.unsubscribe_token = token;
+          } catch (updateErr) {
+            console.warn('Failed to lazy backfill unsubscribe_token in D1:', updateErr);
+          }
+        }
+
+        // Sinkronisasi ke local store server jika ada
+        try {
+          const localSubscribers = loadServerSubscribers();
+          const localSub = localSubscribers.find(s => s.email.toLowerCase() === normalizedEmail);
+          if (localSub) {
+            if (token && localSub.unsubscribe_token !== token) {
+              localSub.unsubscribe_token = token;
+              saveServerSubscribers(localSubscribers);
+            }
+          }
+        } catch {}
+
         return res.json({
           success: true,
           exists: true,
           status,
           isSubscribed: status === 'active',
-          token: status === 'active' ? d1Record.unsubscribe_token : undefined
+          token: status === 'active' ? token : undefined
         });
       }
 
@@ -863,12 +890,18 @@ async function startServer() {
       const localSub = localSubscribers.find(s => s.email.toLowerCase() === normalizedEmail);
       if (localSub) {
         const status = localSub.status || 'active';
+        let token = localSub.unsubscribe_token;
+        if (status === 'active' && (!token || typeof token !== 'string' || token.trim().length < 6)) {
+          token = `unstok_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+          localSub.unsubscribe_token = token;
+          saveServerSubscribers(localSubscribers);
+        }
         return res.json({
           success: true,
           exists: true,
           status,
           isSubscribed: status === 'active',
-          token: status === 'active' ? localSub.unsubscribe_token : undefined
+          token: status === 'active' ? token : undefined
         });
       }
 
