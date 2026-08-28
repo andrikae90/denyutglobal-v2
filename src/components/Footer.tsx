@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CategoryId } from '../types';
 import { CATEGORIES } from '../data/categories';
 import { LegalModalType } from './LegalModal';
@@ -13,9 +13,17 @@ import {
   Send, 
   CheckCircle,
   AlertTriangle,
-  RefreshCw
+  RefreshCw,
+  UserCheck,
+  UserX
 } from 'lucide-react';
-import { subscribeNewsletter, validateEmail } from '../services/subscriptionService';
+import { 
+  subscribeNewsletter, 
+  unsubscribeNewsletter,
+  checkSubscriptionStatus, 
+  validateEmail,
+  normalizeEmail
+} from '../services/subscriptionService';
 import { trackSubscribeEvent } from '../utils/analytics';
 
 interface FooterProps {
@@ -30,14 +38,38 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenSubscription
 }) => {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'unsubscribed_success' | 'error'>('idle');
+  const [dbStatus, setDbStatus] = useState<'checking' | 'active' | 'unsubscribed' | 'none' | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string>('');
+
+  // Periksa status saat email valid dimasukkan
+  useEffect(() => {
+    const clean = normalizeEmail(email);
+    if (!clean || !validateEmail(clean)) {
+      setDbStatus(null);
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      setDbStatus('checking');
+      const res = await checkSubscriptionStatus(clean);
+      if (isMounted) {
+        setDbStatus(res.status);
+      }
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [email]);
 
   const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    const trimmed = email.trim();
+    const trimmed = normalizeEmail(email);
 
     if (!trimmed) {
       setErrorMsg('Silakan masukkan alamat email Anda.');
@@ -51,15 +83,36 @@ export const Footer: React.FC<FooterProps> = ({
 
     setStatus('loading');
 
+    // Jika aktif dan klik unsubscribe
+    if (dbStatus === 'active') {
+      const unsubRes = await unsubscribeNewsletter(trimmed, '');
+      if (unsubRes.success) {
+        setStatus('unsubscribed_success');
+        setDbStatus('unsubscribed');
+        setFeedbackMsg(unsubRes.message || 'Alamat email berhasil dinonaktifkan dari newsletter DenyutGlobal.');
+        setTimeout(() => {
+          setEmail('');
+          setStatus('idle');
+          setFeedbackMsg('');
+        }, 6000);
+      } else {
+        setStatus('error');
+        setErrorMsg(unsubRes.error || 'Gagal memproses permintaan berhenti berlangganan.');
+      }
+      return;
+    }
+
     const result = await subscribeNewsletter(trimmed);
 
     if (result.success) {
       if (result.isAlreadySubscribed) {
         setStatus('already_subscribed');
-        setFeedbackMsg(result.message || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.');
+        setDbStatus('active');
+        setFeedbackMsg(result.message || 'Email ini sudah terdaftar sebagai pelanggan aktif DenyutGlobal.');
         trackSubscribeEvent('already_subscribed');
       } else {
         setStatus('success');
+        setDbStatus('active');
         setFeedbackMsg(result.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.');
         trackSubscribeEvent('new');
       }
@@ -96,11 +149,18 @@ export const Footer: React.FC<FooterProps> = ({
                   {feedbackMsg || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'}
                 </span>
               </div>
+            ) : status === 'unsubscribed_success' ? (
+              <div role="status" aria-live="polite" className="p-3 bg-amber-950/80 border border-amber-500/30 rounded-xl text-amber-200 text-xs flex items-center gap-2">
+                <UserX className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="font-medium">
+                  {feedbackMsg || 'Alamat email Anda telah dinonaktifkan dari daftar langganan.'}
+                </span>
+              </div>
             ) : status === 'already_subscribed' ? (
               <div role="status" aria-live="polite" className="p-3 bg-blue-950/80 border border-blue-500/30 rounded-xl text-blue-200 text-xs flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-blue-400 shrink-0" />
                 <span className="font-medium">
-                  {feedbackMsg || 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'}
+                  {feedbackMsg || 'Email ini sudah terdaftar sebagai pelanggan aktif DenyutGlobal.'}
                 </span>
               </div>
             ) : (
@@ -124,24 +184,46 @@ export const Footer: React.FC<FooterProps> = ({
                     className="w-full pl-10 pr-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-rose-500/50"
                   />
                 </div>
-                <button
-                  id="newsletter-submit-button"
-                  type="submit"
-                  disabled={status === 'loading'}
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs sm:text-sm font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
-                >
-                  {status === 'loading' ? (
-                    <span className="flex items-center gap-1.5">
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Mendaftarkan...</span>
-                    </span>
-                  ) : (
-                    <>
-                      <span>Langganan</span>
-                      <Send className="w-3.5 h-3.5" />
-                    </>
-                  )}
-                </button>
+
+                {dbStatus === 'active' ? (
+                  <button
+                    id="newsletter-submit-button"
+                    type="submit"
+                    disabled={status === 'loading'}
+                    className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-rose-500/40 text-rose-300 text-xs sm:text-sm font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
+                  >
+                    {status === 'loading' ? (
+                      <span className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 border-2 border-rose-300 border-t-transparent rounded-full animate-spin" />
+                        <span>Memproses...</span>
+                      </span>
+                    ) : (
+                      <>
+                        <UserX className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Unsubscribe</span>
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    id="newsletter-submit-button"
+                    type="submit"
+                    disabled={status === 'loading'}
+                    className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs sm:text-sm font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
+                  >
+                    {status === 'loading' ? (
+                      <span className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Mendaftarkan...</span>
+                      </span>
+                    ) : (
+                      <>
+                        <span>{dbStatus === 'unsubscribed' ? 'Langganan Kembali' : 'Langganan'}</span>
+                        <Send className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </button>
+                )}
               </form>
             )}
 

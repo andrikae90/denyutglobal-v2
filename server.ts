@@ -813,7 +813,85 @@ async function startServer() {
   });
 
   // =====================================================================
-  // 1C. ENDPOINT LANGGANAN NEWSLETTER (POST /api/subscribe)
+  // 1C. ENDPOINT STATUS LANGGANAN (GET/POST /api/subscription-status & /api/subscription/status)
+  // =====================================================================
+  const handleSubscriptionStatus = async (req: express.Request, res: express.Response) => {
+    try {
+      const rawEmail = typeof req.query?.email === 'string' 
+        ? req.query.email 
+        : typeof req.body?.email === 'string' 
+        ? req.body.email 
+        : '';
+      const normalizedEmail = rawEmail.trim().toLowerCase();
+
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!normalizedEmail || !emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format alamat email tidak valid.'
+        });
+      }
+
+      // 1. Cek D1 jika aktif
+      let d1Record: any = null;
+      try {
+        const d1Res = await executeD1Query<{ id: string; email: string; status: string }>(
+          `SELECT id, email, status FROM subscribers WHERE email = ? LIMIT 1;`,
+          [normalizedEmail],
+          req
+        );
+        if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
+          d1Record = d1Res.results[0];
+        }
+      } catch (e) {
+        console.warn('D1 subscription status check error:', e);
+      }
+
+      if (d1Record) {
+        const status = d1Record.status || 'active';
+        return res.json({
+          success: true,
+          exists: true,
+          status,
+          isSubscribed: status === 'active'
+        });
+      }
+
+      // 2. Cek penyimpanan lokal server
+      const localSubscribers = loadServerSubscribers();
+      const localSub = localSubscribers.find(s => s.email.toLowerCase() === normalizedEmail);
+      if (localSub) {
+        const status = localSub.status || 'active';
+        return res.json({
+          success: true,
+          exists: true,
+          status,
+          isSubscribed: status === 'active'
+        });
+      }
+
+      return res.json({
+        success: true,
+        exists: false,
+        status: 'none',
+        isSubscribed: false
+      });
+    } catch (err: any) {
+      console.error('Subscription status check error:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Gagal memeriksa status langganan.'
+      });
+    }
+  };
+
+  app.get('/api/subscription-status', handleSubscriptionStatus);
+  app.post('/api/subscription-status', handleSubscriptionStatus);
+  app.get('/api/subscription/status', handleSubscriptionStatus);
+  app.post('/api/subscription/status', handleSubscriptionStatus);
+
+  // =====================================================================
+  // 1D. ENDPOINT LANGGANAN NEWSLETTER (POST /api/subscribe)
   // =====================================================================
   app.post('/api/subscribe', async (req, res) => {
     try {
@@ -842,18 +920,39 @@ async function startServer() {
           // Re-activate subscriber if previously unsubscribed
           existingLocal.status = 'active';
           existingLocal.subscribed_at = nowIso;
+          existingLocal.unsubscribed_at = undefined;
           if (!existingLocal.unsubscribe_token) existingLocal.unsubscribe_token = unsubscribeToken;
           saveServerSubscribers(localSubscribers);
+
+          // Update D1 jika terkoneksi
+          try {
+            await executeD1Query(
+              `UPDATE subscribers SET status = 'active', subscribed_at = ?, unsubscribed_at = NULL WHERE email = ?;`,
+              [nowIso, normalizedEmail],
+              req
+            );
+          } catch (d1Err) {
+            console.warn('D1 re-subscribe sync warning:', d1Err);
+          }
+
+          return res.status(200).json({
+            success: true,
+            isAlreadySubscribed: false,
+            resubscribed: true,
+            message: 'Langganan Anda telah diaktifkan kembali. Anda akan menerima Daily Brief DenyutGlobal berikutnya.'
+          });
         }
+
         return res.status(200).json({
           success: true,
           isAlreadySubscribed: true,
-          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+          message: 'Email ini sudah terdaftar sebagai pelanggan aktif DenyutGlobal.'
         });
       }
 
       // 2. Cek dan simpan ke Cloudflare D1 (jika terkoneksi)
       let alreadyInD1 = false;
+      let d1Status = 'none';
       try {
         await executeD1Query(
           `CREATE TABLE IF NOT EXISTS subscribers (
@@ -890,12 +989,15 @@ async function startServer() {
         if (checkRes.success && Array.isArray(checkRes.results) && checkRes.results.length > 0) {
           alreadyInD1 = true;
           const currentRec: any = checkRes.results[0];
-          if (currentRec.status === 'unsubscribed') {
+          d1Status = currentRec.status || 'active';
+
+          if (d1Status === 'unsubscribed') {
             await executeD1Query(
-              `UPDATE subscribers SET status = 'active', subscribed_at = ? WHERE email = ?;`,
+              `UPDATE subscribers SET status = 'active', subscribed_at = ?, unsubscribed_at = NULL WHERE email = ?;`,
               [nowIso, normalizedEmail],
               req
             );
+            d1Status = 'active';
           }
         } else {
           await executeD1Query(
@@ -921,11 +1023,13 @@ async function startServer() {
         });
         saveServerSubscribers(localSubscribers);
 
-        return res.status(200).json({
-          success: true,
-          isAlreadySubscribed: true,
-          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
-        });
+        if (d1Status === 'active') {
+          return res.status(200).json({
+            success: true,
+            isAlreadySubscribed: true,
+            message: 'Email ini sudah terdaftar sebagai pelanggan aktif DenyutGlobal.'
+          });
+        }
       }
 
       // 3. Simpan ke local file server
@@ -954,7 +1058,9 @@ async function startServer() {
     }
   });
 
-  // 1D. ENDPOINT UNSUBSCRIBE NEWSLETTER (GET/POST /api/unsubscribe)
+  // =====================================================================
+  // 1E. ENDPOINT UNSUBSCRIBE NEWSLETTER (GET/POST /api/unsubscribe)
+  // =====================================================================
   app.all('/api/unsubscribe', async (req, res) => {
     try {
       const token = (req.query.token as string) || (req.body?.token as string) || '';
@@ -962,72 +1068,160 @@ async function startServer() {
       const cleanToken = token.trim();
       const cleanEmail = email.trim().toLowerCase();
 
-      if (!cleanToken && !cleanEmail) {
-        if (req.method === 'GET') {
+      // Untuk GET (link dari email), token wajib ada dan valid
+      if (req.method === 'GET') {
+        if (!cleanToken || cleanToken.length < 6) {
           return res.status(400).send(`
             <!DOCTYPE html>
             <html lang="id">
-            <head><meta charset="utf-8"><title>Batal Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-            <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
-              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
-                <h2 style="margin:0 0 12px 0;color:#f43f5e;">Permintaan Tidak Valid</h2>
-                <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Tautan berhenti berlangganan tidak lengkap atau token tidak ditemukan.</p>
-                <a href="/" style="display:inline-block;margin-top:16px;background:#f43f5e;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+            <head>
+              <meta charset="utf-8">
+              <title>Tautan Tidak Valid - DenyutGlobal</title>
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+            </head>
+            <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+                <div style="font-size:36px;margin-bottom:8px;color:#f43f5e;">⚠️</div>
+                <h2 style="margin:0 0 12px 0;color:#f43f5e;font-size:20px;font-weight:700;">Permintaan Tidak Valid</h2>
+                <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 16px 0;">Token berhenti berlangganan tidak ditemukan atau tidak lengkap. Pastikan Anda menggunakan tautan utuh dari email newsletter DenyutGlobal.</p>
+                <p style="color:#64748b;font-size:12px;margin:0 0 20px 0;">Database dan status langganan Anda tetap aman dan tidak mengalami perubahan.</p>
+                <a href="/" style="display:inline-block;background:#334155;color:#f8fafc;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.2s;">Kembali ke Beranda</a>
               </div>
             </body>
             </html>
           `);
         }
-        return res.status(400).json({ success: false, error: 'Token atau email diperlukan.' });
+      } else {
+        // Untuk POST, minimal token atau email valid harus ada
+        if (!cleanToken && !cleanEmail) {
+          return res.status(400).json({ success: false, error: 'Token atau alamat email berhenti berlangganan diperlukan.' });
+        }
+      }
+
+      // Verifikasi data subscriber di D1 dan local store
+      let matchedSubscriber: { id: string; email: string; status: string } | null = null;
+
+      // 1. Cek di D1
+      try {
+        let querySql = '';
+        let queryParams: any[] = [];
+
+        if (cleanToken && cleanEmail) {
+          querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? AND email = ? LIMIT 1;`;
+          queryParams = [cleanToken, cleanEmail];
+        } else if (cleanToken) {
+          querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE unsubscribe_token = ? LIMIT 1;`;
+          queryParams = [cleanToken];
+        } else if (cleanEmail) {
+          querySql = `SELECT id, email, status, unsubscribe_token FROM subscribers WHERE email = ? LIMIT 1;`;
+          queryParams = [cleanEmail];
+        }
+
+        if (querySql) {
+          const d1Res = await executeD1Query<{ id: string; email: string; status: string }>(
+            querySql,
+            queryParams,
+            req
+          );
+
+          if (d1Res.success && Array.isArray(d1Res.results) && d1Res.results.length > 0) {
+            matchedSubscriber = d1Res.results[0];
+          }
+        }
+      } catch (d1Err) {
+        console.warn('D1 unsubscribe check error:', d1Err);
+      }
+
+      // 2. Cek di local store jika belum ditemukan di D1
+      const localSubscribers = loadServerSubscribers();
+      if (!matchedSubscriber) {
+        const found = localSubscribers.find(s => {
+          if (cleanToken && cleanEmail) {
+            return s.unsubscribe_token === cleanToken && s.email.toLowerCase() === cleanEmail;
+          }
+          if (cleanToken) {
+            return s.unsubscribe_token === cleanToken;
+          }
+          if (cleanEmail) {
+            return s.email.toLowerCase() === cleanEmail;
+          }
+          return false;
+        });
+        if (found) {
+          matchedSubscriber = { id: found.id, email: found.email, status: found.status };
+        }
+      }
+
+      // Jika token/email tidak cocok / tidak ditemukan di sistem
+      if (!matchedSubscriber) {
+        if (req.method === 'GET') {
+          return res.status(400).send(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head>
+              <meta charset="utf-8">
+              <title>Token Tidak Sesuai - DenyutGlobal</title>
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+            </head>
+            <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+              <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+                <div style="font-size:36px;margin-bottom:8px;color:#f43f5e;">✕</div>
+                <h2 style="margin:0 0 12px 0;color:#f43f5e;font-size:20px;font-weight:700;">Data Tidak Dikenali</h2>
+                <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 16px 0;">Data berhenti berlangganan tidak ditemukan dalam sistem. Tidak ada perubahan yang dilakukan pada basis data.</p>
+                <a href="/" style="display:inline-block;background:#334155;color:#f8fafc;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+              </div>
+            </body>
+            </html>
+          `);
+        }
+        return res.status(400).json({ success: false, error: 'Data subscriber tidak ditemukan atau token tidak cocok.' });
       }
 
       const nowIso = new Date().toISOString();
-      let updated = false;
 
-      // Update in server local store
-      const localSubscribers = loadServerSubscribers();
-      for (const sub of localSubscribers) {
-        if ((cleanToken && sub.unsubscribe_token === cleanToken) || (cleanEmail && sub.email.toLowerCase() === cleanEmail)) {
-          sub.status = 'unsubscribed';
-          sub.unsubscribed_at = nowIso;
-          updated = true;
+      // Perbarui status menjadi unsubscribed (JANGAN HAPUS RECORD)
+      if (matchedSubscriber.status !== 'unsubscribed') {
+        // Update D1
+        try {
+          await executeD1Query(
+            `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?;`,
+            [nowIso, matchedSubscriber.id],
+            req
+          );
+        } catch (d1UpdateErr) {
+          console.warn('D1 unsubscribe update error:', d1UpdateErr);
         }
-      }
-      if (updated) {
+
+        // Update local server store
+        for (const sub of localSubscribers) {
+          if (sub.id === matchedSubscriber.id || sub.email.toLowerCase() === matchedSubscriber.email.toLowerCase()) {
+            sub.status = 'unsubscribed';
+            sub.unsubscribed_at = nowIso;
+          }
+        }
         saveServerSubscribers(localSubscribers);
-      }
-
-      // Update in D1
-      try {
-        if (cleanToken) {
-          await executeD1Query(
-            `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE unsubscribe_token = ?;`,
-            [nowIso, cleanToken],
-            req
-          );
-        } else if (cleanEmail) {
-          await executeD1Query(
-            `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE email = ?;`,
-            [nowIso, cleanEmail],
-            req
-          );
-        }
-      } catch (d1Err) {
-        console.warn('D1 unsubscribe warning:', d1Err);
       }
 
       if (req.method === 'GET') {
         return res.status(200).send(`
           <!DOCTYPE html>
           <html lang="id">
-          <head><meta charset="utf-8"><title>Berhenti Berlangganan - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-          <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
-            <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
-              <div style="font-size:40px;margin-bottom:8px;">✓</div>
-              <h2 style="margin:0 0 12px 0;color:#38bdf8;">Berhasil Berhenti Berlangganan</h2>
-              <p style="color:#94a3b8;font-size:14px;line-height:1.6;">Alamat email Anda telah dinonaktifkan dari daftar pengiriman Daily Brief & Newsletter DenyutGlobal.</p>
-              <p style="color:#64748b;font-size:12px;margin-top:12px;">Anda dapat mendaftar kembali kapan saja melalui halaman utama kami.</p>
-              <a href="/" style="display:inline-block;margin-top:20px;background:#38bdf8;color:#0f172a;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;">Kembali ke DenyutGlobal</a>
+          <head>
+            <meta charset="utf-8">
+            <title>Berhasil Berhenti Berlangganan - DenyutGlobal</title>
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+          </head>
+          <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+            <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:480px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+              <div style="width:52px;height:52px;background:#0369a1;color:#ffffff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:bold;margin:0 auto 16px auto;">✓</div>
+              <h2 style="margin:0 0 12px 0;color:#38bdf8;font-size:20px;font-weight:700;">Berhasil Berhenti Berlangganan</h2>
+              <p style="color:#cbd5e1;font-size:14px;line-height:1.6;margin:0 0 12px 0;">
+                Alamat email <strong style="color:#ffffff;">${matchedSubscriber.email}</strong> telah dinonaktifkan dari daftar pengiriman Daily Brief & Newsletter DenyutGlobal.
+              </p>
+              <p style="color:#94a3b8;font-size:13px;line-height:1.5;margin:0 0 20px 0;">
+                Anda tidak akan lagi menerima email rutin dari kami. Jika ini adalah kekeliruan, Anda dapat mendaftar kembali kapan saja melalui halaman utama DenyutGlobal.
+              </p>
+              <a href="/" style="display:inline-block;background:#38bdf8;color:#0f172a;text-decoration:none;padding:12px 24px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 2px 8px rgba(56,189,248,0.3);">Kembali ke DenyutGlobal</a>
             </div>
           </body>
           </html>
@@ -1036,7 +1230,9 @@ async function startServer() {
 
       return res.status(200).json({
         success: true,
-        message: 'Email berhasil dinonaktifkan dari daftar langganan DenyutGlobal.'
+        email: matchedSubscriber.email,
+        status: 'unsubscribed',
+        message: 'Alamat email berhasil dinonaktifkan dari daftar langganan DenyutGlobal.'
       });
     } catch (err: any) {
       console.error('Unsubscribe error:', err);

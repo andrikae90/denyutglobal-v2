@@ -6,6 +6,21 @@
 export interface SubscribeResponse {
   success: boolean;
   isAlreadySubscribed?: boolean;
+  resubscribed?: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface SubscriptionStatusResponse {
+  success: boolean;
+  exists: boolean;
+  status: 'active' | 'unsubscribed' | 'pending' | 'none';
+  isSubscribed: boolean;
+  error?: string;
+}
+
+export interface UnsubscribeResponse {
+  success: boolean;
   message?: string;
   error?: string;
 }
@@ -59,6 +74,70 @@ function saveLocalSubscriber(email: string): void {
 }
 
 /**
+ * Menghapus email dari browser lokal saat unsubscribe
+ */
+export function removeLocalSubscriber(email: string): void {
+  try {
+    const normalized = normalizeEmail(email);
+    const list = getLocalSubscribers().filter(item => item.toLowerCase() !== normalized);
+    localStorage.setItem(LOCAL_STORAGE_SUBSCRIBERS_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+/**
+ * Memeriksa status langganan email dari server database (D1 / Server store)
+ */
+export async function checkSubscriptionStatus(rawEmail: string): Promise<SubscriptionStatusResponse> {
+  const normalized = normalizeEmail(rawEmail);
+  if (!validateEmail(normalized)) {
+    return {
+      success: false,
+      exists: false,
+      status: 'none',
+      isSubscribed: false,
+      error: 'Format email tidak valid.'
+    };
+  }
+
+  try {
+    const response = await fetch(`/api/subscription-status?email=${encodeURIComponent(normalized)}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.success) {
+      const status: 'active' | 'unsubscribed' | 'pending' | 'none' = data.status || (data.isSubscribed ? 'active' : 'none');
+      if (status !== 'active') {
+        removeLocalSubscriber(normalized);
+      } else {
+        saveLocalSubscriber(normalized);
+      }
+      return {
+        success: true,
+        exists: Boolean(data.exists),
+        status,
+        isSubscribed: Boolean(data.isSubscribed)
+      };
+    }
+  } catch (err) {
+    console.warn('[SubscriptionService] Status check API unavailable, using local fallback:', err);
+  }
+
+  // Local fallback
+  const localList = getLocalSubscribers();
+  const existsInLocal = localList.includes(normalized);
+  return {
+    success: true,
+    exists: existsInLocal,
+    status: existsInLocal ? 'active' : 'none',
+    isSubscribed: existsInLocal
+  };
+}
+
+/**
  * Mengirim permintaan pendaftaran subscriber ke backend API / database
  */
 export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeResponse> {
@@ -80,10 +159,6 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
     };
   }
 
-  // 3. Cek apakah sudah pernah terdaftar di local storage perangkat ini
-  const localList = getLocalSubscribers();
-  const existsInLocal = localList.includes(normalized);
-
   try {
     const response = await fetch('/api/subscribe', {
       method: 'POST',
@@ -99,17 +174,18 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
     if (response.ok && data?.success) {
       saveLocalSubscriber(normalized);
 
-      if (data.isAlreadySubscribed || existsInLocal) {
+      if (data.isAlreadySubscribed) {
         return {
           success: true,
           isAlreadySubscribed: true,
-          message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
+          message: data.message || 'Email ini sudah terdaftar sebagai pelanggan aktif DenyutGlobal.'
         };
       }
 
       return {
         success: true,
         isAlreadySubscribed: false,
+        resubscribed: Boolean(data.resubscribed),
         message: data.message || 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
       };
     }
@@ -121,15 +197,6 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
       };
     }
 
-    // Jika server merespons non-200 tetapi offline fallback
-    if (existsInLocal) {
-      return {
-        success: true,
-        isAlreadySubscribed: true,
-        message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
-      };
-    }
-
     saveLocalSubscriber(normalized);
     return {
       success: true,
@@ -138,21 +205,57 @@ export async function subscribeNewsletter(rawEmail: string): Promise<SubscribeRe
     };
   } catch (err: any) {
     console.warn('[SubscriptionService] Server API unavailable, saving to local storage fallback:', err);
-    
-    // Offline / Standalone Fallback
-    if (existsInLocal) {
-      return {
-        success: true,
-        isAlreadySubscribed: true,
-        message: 'Email ini sudah terdaftar sebagai pelanggan DenyutGlobal.'
-      };
-    }
-
     saveLocalSubscriber(normalized);
     return {
       success: true,
       isAlreadySubscribed: false,
       message: 'Berhasil! Email Anda telah terdaftar untuk menerima informasi terbaru dari DenyutGlobal.'
+    };
+  }
+}
+
+/**
+ * Mengirim permintaan berhenti berlangganan (Unsubscribe) dengan token aman
+ */
+export async function unsubscribeNewsletter(rawEmail: string, token: string): Promise<UnsubscribeResponse> {
+  const normalized = normalizeEmail(rawEmail);
+  const cleanToken = (token || '').trim();
+
+  if (!cleanToken) {
+    return {
+      success: false,
+      error: 'Token berhenti berlangganan diperlukan.'
+    };
+  }
+
+  try {
+    const response = await fetch('/api/unsubscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ email: normalized, token: cleanToken })
+    });
+
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.success) {
+      removeLocalSubscriber(normalized);
+      return {
+        success: true,
+        message: data.message || 'Email berhasil dinonaktifkan dari daftar langganan DenyutGlobal.'
+      };
+    }
+
+    return {
+      success: false,
+      error: data?.error || 'Gagal memproses permintaan berhenti berlangganan.'
+    };
+  } catch (err: any) {
+    console.error('[SubscriptionService] Unsubscribe error:', err);
+    return {
+      success: false,
+      error: 'Gagal menghubungi server. Silakan coba kembali.'
     };
   }
 }
