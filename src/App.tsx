@@ -474,15 +474,34 @@ export default function App() {
 
   const handleShare = async (article: NewsItem) => {
     const articleTitle = article.title || article.judul || 'Berita DenyutGlobal';
-    const articleSummary = article.summary || article.ringkasan || '';
+    const rawSummary = (article.summary || article.ringkasan || '').trim();
+    
+    // Format ringkasan pendek maksimal 180 karakter dengan pemotongan rapi di batas kata
+    let formattedSummary = '';
+    if (rawSummary) {
+      if (rawSummary.length <= 180) {
+        formattedSummary = rawSummary;
+      } else {
+        const truncated = rawSummary.slice(0, 180);
+        const lastSpace = truncated.lastIndexOf(' ');
+        const cleanCut = lastSpace > 120 ? truncated.slice(0, lastSpace) : truncated;
+        formattedSummary = `${cleanCut.replace(/[.,;:!?\s]+$/, '')}...`;
+      }
+    }
+
     const shareUrl = getArticleUrl(article);
+
+    // Format text share: Judul + Ringkasan pendek + Baca selengkapnya:
+    const shareText = formattedSummary
+      ? `${articleTitle}\n\n${formattedSummary}\n\nBaca selengkapnya:`
+      : `${articleTitle}\n\nBaca selengkapnya:`;
 
     // 1. Check if Web Share API is available on the device/browser
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
         await navigator.share({
           title: articleTitle,
-          text: articleSummary ? `${articleTitle}\n\n${articleSummary}` : articleTitle,
+          text: shareText,
           url: shareUrl
         });
         return;
