@@ -9,6 +9,7 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
+import { injectOpenGraphHtml } from './src/utils/openGraph';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail } from './src/services/newsletterTemplate';
 
@@ -1421,6 +1422,72 @@ async function startServer() {
         success: false,
         error: 'Gagal memuat artikel publik.'
       });
+    }
+  });
+
+  // GET /api/articles/:slug/image - Menyajikan gambar artikel biner publik untuk Open Graph / bot
+  app.get('/api/articles/:slug/image', async (req, res) => {
+    try {
+      const { slug } = req.params;
+      if (!slug) {
+        return res.status(400).send('Slug artikel wajib disertakan.');
+      }
+
+      const cleanSlug = decodeURIComponent(slug).trim().toLowerCase();
+      let rawImage = '';
+
+      const sql = `SELECT image, gambar, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
+      const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
+
+      if (d1Result.success && d1Result.results.length > 0) {
+        rawImage = (d1Result.results[0].image || d1Result.results[0].gambar || '').trim();
+      }
+
+      if (!rawImage) {
+        const published = serverArticles.filter(
+          (a) => a.status === 'published' && a.reviewed === true
+        );
+        const found = published.find(
+          (a) =>
+            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
+            (a.id && a.id.toLowerCase() === cleanSlug)
+        );
+        if (found) {
+          rawImage = (found.image || found.gambar || '').trim();
+        }
+      }
+
+      if (!rawImage) {
+        return res.status(404).send('Image Not Found');
+      }
+
+      // 1. Base64 Data URL
+      if (rawImage.startsWith('data:image/')) {
+        const match = rawImage.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+        if (match) {
+          const mimeType = match[1];
+          const base64Data = match[2];
+          try {
+            const buffer = Buffer.from(base64Data, 'base64');
+            res.setHeader('Content-Type', mimeType);
+            res.setHeader('Cache-Control', 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            return res.status(200).send(buffer);
+          } catch (decodeErr) {
+            return res.status(500).send('Error decoding image binary');
+          }
+        }
+      }
+
+      // 2. HTTPS URL
+      if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) {
+        return res.redirect(302, rawImage);
+      }
+
+      return res.status(404).send('Image Not Found');
+    } catch (err: any) {
+      console.error('Error serving article image:', err);
+      return res.status(500).send('Internal Server Error');
     }
   });
 
@@ -3486,6 +3553,48 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
         error: 'Gagal membuat Ilustrasi AI. Artikel tetap dapat diproses tanpa gambar atau gunakan Upload Foto.',
         details: err.message
       });
+    }
+  });
+
+  // GET /berita/:slug - Server-Side Open Graph metadata rendering
+  app.get(['/berita/:slug', '/berita/:slug/'], async (req, res, next) => {
+    try {
+      const { slug } = req.params;
+      const cleanSlug = decodeURIComponent(slug || '').trim().toLowerCase();
+      const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+
+      let article: any = null;
+      const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
+      const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
+
+      if (d1Result.success && d1Result.results.length > 0) {
+        article = rowToNewsItem(d1Result.results[0]);
+      } else {
+        const published = serverArticles.filter((a) => a.status === 'published' && a.reviewed === true);
+        article = published.find(
+          (a) =>
+            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
+            (a.id && a.id.toLowerCase() === cleanSlug)
+        );
+      }
+
+      if (article) {
+        let htmlPath = path.join(process.cwd(), 'dist', 'index.html');
+        if (!fs.existsSync(htmlPath)) {
+          htmlPath = path.join(process.cwd(), 'index.html');
+        }
+        if (fs.existsSync(htmlPath)) {
+          const html = fs.readFileSync(htmlPath, 'utf-8');
+          const modifiedHtml = injectOpenGraphHtml(html, article, domain);
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'public, max-age=600, s-maxage=3600, stale-while-revalidate=600');
+          return res.send(modifiedHtml);
+        }
+      }
+      return next();
+    } catch (e) {
+      console.warn('Error rendering server-side article metadata in Express:', e);
+      return next();
     }
   });
 

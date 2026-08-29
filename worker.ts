@@ -2,6 +2,7 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
+import { injectOpenGraphHtml } from './src/utils/openGraph';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail, NewsletterArticlePayload } from './src/services/newsletterTemplate';
 
@@ -559,6 +560,89 @@ export default {
         source: 'server_store',
         count: memoryArticlesCache.length,
         data: memoryArticlesCache
+      });
+    }
+
+    // 4.5. PUBLIC ARTICLE IMAGE (GET /api/articles/:slug/image)
+    if (pathname.startsWith('/api/articles/') && pathname.endsWith('/image') && (method === 'GET' || method === 'HEAD')) {
+      const rawSlug = pathname.slice('/api/articles/'.length, -'/image'.length).trim();
+      const slug = decodeURIComponent(rawSlug).trim().toLowerCase();
+      if (!slug) {
+        return new Response('Slug artikel wajib disertakan.', {
+          status: 400,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        });
+      }
+
+      let rawImage = '';
+      if (env.DB) {
+        try {
+          const sql = `SELECT image, gambar, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+          const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
+          if (res.success && Array.isArray(res.results) && res.results.length > 0) {
+            rawImage = (res.results[0].image || res.results[0].gambar || '').trim();
+          }
+        } catch (e) {
+          console.warn('Error fetching article image from D1:', e);
+        }
+      }
+
+      if (!rawImage) {
+        const found = memoryArticlesCache.find(
+          (a) =>
+            ((a.slug && a.slug.toLowerCase() === slug) || a.id === slug) &&
+            a.status === 'published'
+        );
+        if (found) {
+          rawImage = (found.image || found.gambar || '').trim();
+        }
+      }
+
+      if (!rawImage) {
+        return new Response('Image Not Found', {
+          status: 404,
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=300'
+          }
+        });
+      }
+
+      // 1. Base64 Data URL
+      if (rawImage.startsWith('data:image/')) {
+        const match = rawImage.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+        if (match) {
+          const mimeType = match[1];
+          const base64Data = match[2];
+          try {
+            const binaryString = atob(base64Data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            return new Response(method === 'HEAD' ? null : bytes, {
+              status: 200,
+              headers: {
+                'Content-Type': mimeType,
+                'Cache-Control': 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
+                'X-Content-Type-Options': 'nosniff'
+              }
+            });
+          } catch (decodeErr) {
+            return new Response('Error decoding image binary data', { status: 500 });
+          }
+        }
+      }
+
+      // 2. HTTPS URL
+      if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) {
+        return Response.redirect(rawImage, 302);
+      }
+
+      return new Response('Image Not Found', {
+        status: 404,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
       });
     }
 
@@ -1962,6 +2046,57 @@ Kembalikan HANYA format JSON valid:
           'Access-Control-Allow-Origin': '*'
         }
       });
+    }
+
+    // 18.5 SERVER-SIDE OPEN GRAPH & SEO FOR ARTICLE PAGES (/berita/:slug)
+    if ((pathname.startsWith('/berita/') || pathname === '/berita') && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      const rawSlug = pathname.replace(/^\/berita\/?/, '').replace(/\/+$/, '').trim();
+
+      if (rawSlug) {
+        const cleanSlug = decodeURIComponent(rawSlug).trim().toLowerCase();
+        let article: any = null;
+
+        if (env.DB) {
+          try {
+            const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+            const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, cleanSlug]);
+            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
+              article = rowToNewsItem(res.results[0]);
+            }
+          } catch (d1Err) {
+            console.warn('D1 lookup failed for article page metadata:', d1Err);
+          }
+        }
+
+        if (!article) {
+          article = memoryArticlesCache.find(
+            (a) =>
+              ((a.slug && a.slug.toLowerCase() === cleanSlug) || a.id === cleanSlug) &&
+              a.status === 'published'
+          );
+        }
+
+        if (article && env.ASSETS && typeof env.ASSETS.fetch === 'function') {
+          try {
+            const assetRes = await env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+            if (assetRes.status === 200) {
+              const html = await assetRes.text();
+              const modifiedHtml = injectOpenGraphHtml(html, article, appUrl);
+              return new Response(method === 'HEAD' ? null : modifiedHtml, {
+                status: 200,
+                headers: {
+                  'Content-Type': 'text/html; charset=utf-8',
+                  'Cache-Control': 'public, max-age=600, s-maxage=3600, stale-while-revalidate=600',
+                  'Vary': 'Accept-Encoding'
+                }
+              });
+            }
+          } catch (assetErr) {
+            console.warn('Failed to rewrite article HTML metadata:', assetErr);
+          }
+        }
+      }
     }
 
     // 19. STATIC ASSETS & SPA ROUTING (Cloudflare Assets Binding)
