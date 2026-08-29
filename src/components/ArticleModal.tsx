@@ -371,26 +371,24 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
           )}
 
           {/* Featured Image & Caption */}
-          {hasValidImage(article.image, article.gambar) && (
-            <div className="rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 relative">
-              <img
-                src={getValidImageUrl(article.image, article.gambar)}
-                alt={article.title || article.judul}
-                referrerPolicy="no-referrer"
-                className="w-full max-h-[440px] object-cover object-center"
-              />
-              <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                <div className="italic font-medium">
-                  {article.captionGambar || `Visualisasi peristiwa terkait ${article.title || article.judul}`}
-                </div>
-                {(article.imageType === 'ai_illustration' || article.imageCredit || (article.image && article.image.startsWith('data:'))) && (
-                  <span className="px-2 py-0.5 bg-slate-900 text-white rounded text-[10px] font-bold tracking-wide shrink-0">
-                    {article.imageCredit || 'Ilustrasi AI — DenyutGlobal'}
-                  </span>
-                )}
+          <div className="rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 relative">
+            <img
+              src={getValidImageUrl(article.image, article.gambar)}
+              alt={article.title || article.judul}
+              referrerPolicy="no-referrer"
+              className="w-full max-h-[440px] object-cover object-center"
+            />
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+              <div className="italic font-medium">
+                {article.captionGambar || `Visualisasi peristiwa terkait ${article.title || article.judul}`}
               </div>
+              {(article.imageType === 'ai_illustration' || article.imageCredit || (article.image && article.image.startsWith('data:'))) && (
+                <span className="px-2 py-0.5 bg-slate-900 text-white rounded text-[10px] font-bold tracking-wide shrink-0">
+                  {article.imageCredit || 'Ilustrasi AI — DenyutGlobal'}
+                </span>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Summary Box */}
           <div className="p-4 bg-slate-50 border-l-4 border-rose-600 rounded-r-xl">
