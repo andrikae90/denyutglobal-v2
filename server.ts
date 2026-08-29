@@ -1436,11 +1436,11 @@ async function startServer() {
       const cleanSlug = decodeURIComponent(slug).trim().toLowerCase();
       let rawImage = '';
 
-      const sql = `SELECT image, gambar, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
+      const sql = `SELECT image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
       const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
 
       if (d1Result.success && d1Result.results.length > 0) {
-        rawImage = (d1Result.results[0].image || d1Result.results[0].gambar || '').trim();
+        rawImage = (d1Result.results[0].image || '').trim();
       }
 
       if (!rawImage) {

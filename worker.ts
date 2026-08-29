@@ -577,10 +577,10 @@ export default {
       let rawImage = '';
       if (env.DB) {
         try {
-          const sql = `SELECT image, gambar, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+          const sql = `SELECT image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
           const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
           if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-            rawImage = (res.results[0].image || res.results[0].gambar || '').trim();
+            rawImage = (res.results[0].image || '').trim();
           }
         } catch (e) {
           console.warn('Error fetching article image from D1:', e);
