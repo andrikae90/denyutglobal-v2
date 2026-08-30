@@ -260,27 +260,47 @@ export default function App() {
     showToast('Sesi Ruang Redaksi telah dikunci');
   }, []);
 
-  // LocalStorage bookmarks initialization
+  // LocalStorage bookmarks initialization with stale filtering
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>(() => {
     if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-      return ['art-001'];
+      return [];
     }
     try {
       const saved = localStorage.getItem('denyutglobal_bookmarks');
-      return saved ? JSON.parse(saved) : ['art-001'];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      const initialPublished = editorialStore.getAllArticles().filter(
+        (a) => a.status === 'published' && a.reviewed === true
+      );
+      const validIds = parsed.filter((id: string) => 
+        initialPublished.some((a) => a.id === id)
+      );
+      return validIds;
     } catch {
-      return ['art-001'];
+      return [];
     }
   });
 
+  // Keep bookmarks synchronized with available publishedArticles and localStorage
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return;
     try {
+      if (publishedArticles.length > 0 && bookmarkedIds.length > 0) {
+        const filtered = bookmarkedIds.filter((id) =>
+          publishedArticles.some((a) => a.id === id)
+        );
+        if (filtered.length !== bookmarkedIds.length) {
+          setBookmarkedIds(filtered);
+          localStorage.setItem('denyutglobal_bookmarks', JSON.stringify(filtered));
+          return;
+        }
+      }
       localStorage.setItem('denyutglobal_bookmarks', JSON.stringify(bookmarkedIds));
     } catch (e) {
       console.error('Failed to save bookmarks to localStorage', e);
     }
-  }, [bookmarkedIds]);
+  }, [bookmarkedIds, publishedArticles]);
 
   // Scroll listener for back to top button
   useEffect(() => {

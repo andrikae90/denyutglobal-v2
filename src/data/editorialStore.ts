@@ -572,6 +572,20 @@ export class EditorialStore {
    * Simpan artikel (Asinkron API-First dengan fallback sinkron ke LocalStorage)
    */
   public async saveArticleToApi(article: NewsItem, token?: string): Promise<NewsItem> {
+    // Validasi ketat gambar sebelum publish ke API & database D1
+    if (article.status === 'published') {
+      const trimmedImg = (article.image || article.gambar || '').trim();
+      const isValidImage = Boolean(
+        trimmedImg &&
+        (trimmedImg.toLowerCase().startsWith('data:image/') ||
+         trimmedImg.toLowerCase().startsWith('https://') ||
+         trimmedImg.toLowerCase().startsWith('http://'))
+      );
+      if (!isValidImage) {
+        throw new Error('Artikel belum memiliki gambar ilustrasi. Tambahkan gambar sebelum menerbitkan artikel.');
+      }
+    }
+
     // 1. Siapkan naskah terformat
     const savedLocal = this.saveArticle(article);
 

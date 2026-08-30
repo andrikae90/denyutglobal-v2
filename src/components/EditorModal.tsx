@@ -977,6 +977,20 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
         }
       }
 
+      // Validasi wajib gambar ilustrasi sebelum publish
+      const trimmedImage = (image || '').trim();
+      const isValidImage = Boolean(
+        trimmedImage &&
+        (trimmedImage.toLowerCase().startsWith('data:image/') ||
+         trimmedImage.toLowerCase().startsWith('https://') ||
+         trimmedImage.toLowerCase().startsWith('http://'))
+      );
+
+      if (!isValidImage) {
+        setFormError('Artikel belum memiliki gambar ilustrasi. Tambahkan gambar sebelum menerbitkan artikel.');
+        return;
+      }
+
       // Mandatory source check: if no sources are entered, block publish
       if (validSources.length === 0) {
         setFactCheckWarning('⚠️ Perlu Verifikasi: Sumber rujukan belum diisi. Setiap fakta penting harus dapat ditelusuri ke sumber rujukan.');
