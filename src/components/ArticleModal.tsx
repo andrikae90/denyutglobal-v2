@@ -373,7 +373,7 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
           {/* Featured Image & Caption */}
           <div className="rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 relative">
             <img
-              src={getValidImageUrl(article.image, article.gambar)}
+              src={getValidImageUrl(article.image, article.gambar, article)}
               alt={article.title || article.judul}
               referrerPolicy="no-referrer"
               className="w-full max-h-[440px] object-cover object-center"
@@ -592,7 +592,7 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
                     className="p-3 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer flex gap-3 group"
                   >
                     <img
-                      src={getValidImageUrl(rel.image, rel.gambar)}
+                      src={getValidImageUrl(rel.image, rel.gambar, rel)}
                       alt={rel.title || rel.judul}
                       referrerPolicy="no-referrer"
                       className="w-20 h-20 rounded-lg object-cover shrink-0"

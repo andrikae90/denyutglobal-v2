@@ -46,7 +46,7 @@ export const FeaturedNews: React.FC<FeaturedNewsProps> = ({
               {/* Image Container */}
               <div className="relative h-48 sm:h-52 w-full overflow-hidden bg-slate-100">
                 <img
-                  src={getValidImageUrl(item.gambar, item.image)}
+                  src={getValidImageUrl(item.gambar, item.image, item)}
                   alt={item.judul || item.title}
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"

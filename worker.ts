@@ -1,4 +1,5 @@
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
+import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
@@ -275,10 +276,24 @@ ON CONFLICT(id) DO UPDATE SET
   source_urls_json = excluded.source_urls_json,
   nama_sumber = excluded.nama_sumber,
   url_sumber = excluded.url_sumber,
-  image = excluded.image,
-  caption_gambar = excluded.caption_gambar,
-  image_type = excluded.image_type,
-  image_credit = excluded.image_credit,
+  image = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' THEN excluded.image
+    ELSE articles.image
+  END,
+  caption_gambar = CASE
+    WHEN excluded.caption_gambar IS NOT NULL AND TRIM(excluded.caption_gambar) != '' THEN excluded.caption_gambar
+    ELSE articles.caption_gambar
+  END,
+  image_type = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' THEN excluded.image_type
+    WHEN articles.image IS NOT NULL AND TRIM(articles.image) != '' THEN articles.image_type
+    ELSE excluded.image_type
+  END,
+  image_credit = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' AND excluded.image_credit IS NOT NULL AND TRIM(excluded.image_credit) != '' THEN excluded.image_credit
+    WHEN articles.image IS NOT NULL AND TRIM(articles.image) != '' THEN articles.image_credit
+    ELSE COALESCE(NULLIF(excluded.image_credit, ''), articles.image_credit)
+  END,
   status = excluded.status,
   reviewed = excluded.reviewed,
   editorial_revision_notes = excluded.editorial_revision_notes,
@@ -575,31 +590,46 @@ export default {
       }
 
       let rawImage = '';
+      let articleData: any = null;
+
       if (env.DB) {
         try {
-          const sql = `SELECT image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+          const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
           const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
           if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-            rawImage = (res.results[0].image || '').trim();
+            articleData = res.results[0];
+            rawImage = (articleData.image || '').trim();
           }
         } catch (e) {
           console.warn('Error fetching article image from D1:', e);
         }
       }
 
-      if (!rawImage) {
+      if (!articleData) {
         const found = memoryArticlesCache.find(
           (a) =>
-            ((a.slug && a.slug.toLowerCase() === slug) || a.id === slug) &&
-            a.status === 'published'
+            (a.slug && a.slug.toLowerCase() === slug) || a.id === slug
         );
         if (found) {
+          articleData = found;
           rawImage = (found.image || found.gambar || '').trim();
         }
       }
 
-      if (!rawImage) {
-        return new Response('Image Not Found', {
+      if (!articleData) {
+        const foundInit = INITIAL_EDITORIAL_ARTICLES.find(
+          (a) =>
+            (a.slug && a.slug.toLowerCase() === slug) || a.id === slug
+        );
+        if (foundInit) {
+          articleData = foundInit;
+          rawImage = (foundInit.image || foundInit.gambar || '').trim();
+        }
+      }
+
+      // If article was not found at all, return 404
+      if (!articleData) {
+        return new Response('Article Not Found', {
           status: 404,
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
@@ -608,7 +638,7 @@ export default {
         });
       }
 
-      // 1. Base64 Data URL
+      // 1. If article has Base64 Data URL
       if (rawImage.startsWith('data:image/')) {
         const match = rawImage.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
         if (match) {
@@ -630,19 +660,69 @@ export default {
               }
             });
           } catch (decodeErr) {
-            return new Response('Error decoding image binary data', { status: 500 });
+            console.warn('Error decoding Base64 image, falling back to thematic SVG:', decodeErr);
           }
         }
       }
 
-      // 2. HTTPS URL
-      if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) {
+      // 1.5. If article has static asset image path (e.g. /images/... or /assets/...)
+      if (rawImage.startsWith('/') && !rawImage.startsWith('//')) {
+        if (env.ASSETS && typeof env.ASSETS.fetch === 'function') {
+          try {
+            const assetUrl = new URL(rawImage, request.url);
+            const assetReq = new Request(assetUrl.toString(), {
+              method: method === 'HEAD' ? 'HEAD' : 'GET',
+              headers: request.headers
+            });
+            const assetRes = await env.ASSETS.fetch(assetReq);
+            if (assetRes.status === 200) {
+              const resHeaders = new Headers(assetRes.headers);
+              const currentType = resHeaders.get('Content-Type') || '';
+              if (!currentType || currentType === 'application/octet-stream') {
+                if (/\.jpe?g$/i.test(rawImage)) {
+                  resHeaders.set('Content-Type', 'image/jpeg');
+                } else if (/\.png$/i.test(rawImage)) {
+                  resHeaders.set('Content-Type', 'image/png');
+                } else if (/\.webp$/i.test(rawImage)) {
+                  resHeaders.set('Content-Type', 'image/webp');
+                }
+              }
+              resHeaders.set('Cache-Control', 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400');
+              resHeaders.set('X-Content-Type-Options', 'nosniff');
+              return new Response(method === 'HEAD' ? null : assetRes.body, {
+                status: 200,
+                headers: resHeaders
+              });
+            }
+          } catch (assetErr) {
+            console.warn('Error fetching image asset from ASSETS binding:', assetErr);
+          }
+        }
+      }
+
+      // 2. If article has valid external HTTPS URL (excluding legacy default unsplash URL)
+      if (
+        (rawImage.startsWith('http://') || rawImage.startsWith('https://')) &&
+        !rawImage.includes('photo-1585829365295-ab7cd400c167')
+      ) {
         return Response.redirect(rawImage, 302);
       }
 
-      return new Response('Image Not Found', {
-        status: 404,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      // 3. Fallback: Dynamic deterministic thematic SVG tailored to article category and title
+      const svgMarkup = generateThematicCategorySvgRaw({
+        title: articleData.title || articleData.judul || 'Berita Terkini DenyutGlobal',
+        category: articleData.category || articleData.kategori || articleData.category_label || 'Dunia',
+        location: articleData.location || articleData.negara_lokasi || 'Internasional',
+        slug
+      });
+
+      return new Response(method === 'HEAD' ? null : svgMarkup, {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/svg+xml; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400',
+          'X-Content-Type-Options': 'nosniff'
+        }
       });
     }
 
@@ -1138,6 +1218,17 @@ export default {
           return jsonResponse({ success: false, error: 'Judul artikel wajib diisi.' }, 400);
         }
 
+        // Preserve existing image if update or save payload has empty/undefined image
+        let existingIdx = memoryArticlesCache.findIndex(a => a.id === articlePayload.id);
+        const currentBase = existingIdx >= 0 ? memoryArticlesCache[existingIdx] : null;
+        if (currentBase && (!articlePayload.image || !articlePayload.image.trim()) && currentBase.image) {
+          articlePayload.image = currentBase.image;
+          articlePayload.gambar = currentBase.gambar;
+          articlePayload.captionGambar = articlePayload.captionGambar || currentBase.captionGambar;
+          articlePayload.imageType = articlePayload.imageType || currentBase.imageType;
+          articlePayload.imageCredit = articlePayload.imageCredit || currentBase.imageCredit;
+        }
+
         const normalized = normalizeNewsItem(articlePayload);
         const params = newsItemToSqlParams(normalized);
 
@@ -1145,7 +1236,7 @@ export default {
         const d1Result = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, params);
 
         // Update in-memory fallback
-        const existingIdx = memoryArticlesCache.findIndex(a => a.id === normalized.id);
+        existingIdx = memoryArticlesCache.findIndex(a => a.id === normalized.id);
         if (existingIdx >= 0) {
           memoryArticlesCache[existingIdx] = normalized;
         } else {
@@ -1197,12 +1288,46 @@ export default {
         const updateData: any = await request.json();
 
         const existingIdx = memoryArticlesCache.findIndex(a => a.id === id);
-        const currentBase = existingIdx >= 0 ? memoryArticlesCache[existingIdx] : updateData;
+        let currentBase = existingIdx >= 0 ? memoryArticlesCache[existingIdx] : null;
+
+        if (!currentBase && env.DB) {
+          try {
+            const d1Check = await executeWorkerD1Query(env.DB, 'SELECT * FROM articles WHERE id = ? LIMIT 1;', [id]);
+            if (d1Check.success && Array.isArray(d1Check.results) && d1Check.results.length > 0) {
+              currentBase = rowToNewsItem(d1Check.results[0]);
+            }
+          } catch (d1Err) {
+            console.warn('Could not query current article from D1:', d1Err);
+          }
+        }
+
+        if (!currentBase) {
+          currentBase = updateData;
+        }
+
+        // Image preservation: retain existing image if editor did not submit a replacement image
+        const existingImage = (currentBase.image || currentBase.gambar || '').trim();
+        const incomingImage = (updateData.image !== undefined ? updateData.image : updateData.gambar !== undefined ? updateData.gambar : '').trim();
+        const finalImage = (incomingImage && incomingImage.length > 0) ? incomingImage : existingImage;
+        const finalImageType = (incomingImage && incomingImage.length > 0)
+          ? (updateData.imageType || currentBase.imageType || 'ai_illustration')
+          : (currentBase.imageType || updateData.imageType || 'ai_illustration');
+        const finalCaption = (updateData.captionGambar !== undefined && updateData.captionGambar.trim().length > 0)
+          ? updateData.captionGambar.trim()
+          : (currentBase.captionGambar || '');
+        const finalCredit = (updateData.imageCredit !== undefined && updateData.imageCredit.trim().length > 0)
+          ? updateData.imageCredit.trim()
+          : (currentBase.imageCredit || '');
 
         const updated = normalizeNewsItem({
           ...currentBase,
           ...updateData,
           id,
+          image: finalImage,
+          gambar: finalImage,
+          imageType: finalImageType,
+          captionGambar: finalCaption,
+          imageCredit: finalCredit,
           updatedAt: new Date().toISOString()
         });
 
@@ -1274,12 +1399,24 @@ export default {
         let d1Count = 0;
         for (const item of articles) {
           if (!item || (!item.title && !item.judul)) continue;
+          
+          // Image preservation in batch sync
+          let idx = memoryArticlesCache.findIndex(a => a.id === item.id || (a.slug && a.slug === item.slug));
+          const currentBase = idx >= 0 ? memoryArticlesCache[idx] : null;
+          if (currentBase && (!item.image || !item.image.trim()) && currentBase.image) {
+            item.image = currentBase.image;
+            item.gambar = currentBase.gambar;
+            item.captionGambar = item.captionGambar || currentBase.captionGambar;
+            item.imageType = item.imageType || currentBase.imageType;
+            item.imageCredit = item.imageCredit || currentBase.imageCredit;
+          }
+
           const norm = normalizeNewsItem(item);
           const params = newsItemToSqlParams(norm);
           const res = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, params);
           if (res.success) d1Count++;
 
-          const idx = memoryArticlesCache.findIndex(a => a.id === norm.id || (a.slug && a.slug === norm.slug));
+          idx = memoryArticlesCache.findIndex(a => a.id === norm.id || (a.slug && a.slug === norm.slug));
           if (idx >= 0) {
             memoryArticlesCache[idx] = norm;
           } else {

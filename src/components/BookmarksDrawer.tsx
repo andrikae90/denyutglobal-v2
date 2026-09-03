@@ -67,7 +67,7 @@ export const BookmarksDrawer: React.FC<BookmarksDrawerProps> = ({
                 }}
               >
                 <img
-                  src={getValidImageUrl(article.gambar, article.image)}
+                  src={getValidImageUrl(article.gambar, article.image, article)}
                   alt={article.judul || article.title}
                   referrerPolicy="no-referrer"
                   className="w-20 h-20 rounded-lg object-cover shrink-0"

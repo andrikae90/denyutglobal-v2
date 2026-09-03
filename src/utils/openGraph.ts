@@ -34,6 +34,10 @@ export function getArticleOgImageUrl(
   if (rawImage.startsWith('/')) {
     return `${domain}${rawImage}`;
   }
+  // If rawImage is empty, use the article's own deterministic public image endpoint
+  if (slug) {
+    return `${domain}/api/articles/${encodeURIComponent(slug)}/image`;
+  }
   return HOMEPAGE_OG.image;
 }
 

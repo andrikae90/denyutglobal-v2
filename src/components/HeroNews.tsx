@@ -58,7 +58,7 @@ export const HeroNews: React.FC<HeroNewsProps> = ({
             onClick={() => onSelectArticle(heroItem)}
           >
             <img
-              src={getValidImageUrl(heroItem.gambar, heroItem.image)}
+              src={getValidImageUrl(heroItem.gambar, heroItem.image, heroItem)}
               alt={heroItem.judul || heroItem.title}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"

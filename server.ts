@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
+import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
@@ -330,10 +331,24 @@ ON CONFLICT(id) DO UPDATE SET
   source_urls_json = excluded.source_urls_json,
   nama_sumber = excluded.nama_sumber,
   url_sumber = excluded.url_sumber,
-  image = excluded.image,
-  caption_gambar = excluded.caption_gambar,
-  image_type = excluded.image_type,
-  image_credit = excluded.image_credit,
+  image = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' THEN excluded.image
+    ELSE articles.image
+  END,
+  caption_gambar = CASE
+    WHEN excluded.caption_gambar IS NOT NULL AND TRIM(excluded.caption_gambar) != '' THEN excluded.caption_gambar
+    ELSE articles.caption_gambar
+  END,
+  image_type = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' THEN excluded.image_type
+    WHEN articles.image IS NOT NULL AND TRIM(articles.image) != '' THEN articles.image_type
+    ELSE excluded.image_type
+  END,
+  image_credit = CASE
+    WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' AND excluded.image_credit IS NOT NULL AND TRIM(excluded.image_credit) != '' THEN excluded.image_credit
+    WHEN articles.image IS NOT NULL AND TRIM(articles.image) != '' THEN articles.image_credit
+    ELSE COALESCE(NULLIF(excluded.image_credit, ''), articles.image_credit)
+  END,
   status = excluded.status,
   reviewed = excluded.reviewed,
   editorial_revision_notes = excluded.editorial_revision_notes,
@@ -1435,30 +1450,43 @@ async function startServer() {
 
       const cleanSlug = decodeURIComponent(slug).trim().toLowerCase();
       let rawImage = '';
+      let articleData: any = null;
 
-      const sql = `SELECT image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+      const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
       const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
 
       if (d1Result.success && d1Result.results.length > 0) {
-        rawImage = (d1Result.results[0].image || '').trim();
+        articleData = d1Result.results[0];
+        rawImage = (articleData.image || '').trim();
       }
 
-      if (!rawImage) {
-        const published = serverArticles.filter(
-          (a) => a.status === 'published' && a.reviewed === true
-        );
-        const found = published.find(
+      if (!articleData) {
+        const found = serverArticles.find(
           (a) =>
             (a.slug && a.slug.toLowerCase() === cleanSlug) ||
             (a.id && a.id.toLowerCase() === cleanSlug)
         );
         if (found) {
+          articleData = found;
           rawImage = (found.image || found.gambar || '').trim();
         }
       }
 
-      if (!rawImage) {
-        return res.status(404).send('Image Not Found');
+      if (!articleData) {
+        const foundInit = INITIAL_EDITORIAL_ARTICLES.find(
+          (a) =>
+            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
+            (a.id && a.id.toLowerCase() === cleanSlug)
+        );
+        if (foundInit) {
+          articleData = foundInit;
+          rawImage = (foundInit.image || foundInit.gambar || '').trim();
+        }
+      }
+
+      // If article does not exist, return 404
+      if (!articleData) {
+        return res.status(404).send('Article Not Found');
       }
 
       // 1. Base64 Data URL
@@ -1474,17 +1502,31 @@ async function startServer() {
             res.setHeader('X-Content-Type-Options', 'nosniff');
             return res.status(200).send(buffer);
           } catch (decodeErr) {
-            return res.status(500).send('Error decoding image binary');
+            console.warn('Error decoding Base64 image, falling back to thematic SVG:', decodeErr);
           }
         }
       }
 
-      // 2. HTTPS URL
-      if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) {
+      // 2. HTTPS URL (skip legacy default unsplash url)
+      if (
+        (rawImage.startsWith('http://') || rawImage.startsWith('https://')) &&
+        !rawImage.includes('photo-1585829365295-ab7cd400c167')
+      ) {
         return res.redirect(302, rawImage);
       }
 
-      return res.status(404).send('Image Not Found');
+      // 3. Thematic SVG Fallback based on category and title
+      const svgMarkup = generateThematicCategorySvgRaw({
+        title: articleData.title || articleData.judul || 'Berita Terkini DenyutGlobal',
+        category: articleData.category || articleData.kategori || articleData.category_label || 'Dunia',
+        location: articleData.location || articleData.negara_lokasi || 'Internasional',
+        slug: cleanSlug
+      });
+
+      res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.status(200).send(svgMarkup);
     } catch (err: any) {
       console.error('Error serving article image:', err);
       return res.status(500).send('Internal Server Error');
@@ -1583,6 +1625,32 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Judul artikel wajib diisi.' });
       }
 
+      // Preserve existing image if save payload has empty/undefined image (unless explicit delete)
+      const isExplicitDelete = articlePayload.deleteImage === true || articlePayload.hapusGambar === true;
+      let existingIdx = serverArticles.findIndex((a) => a.id === articlePayload.id || (a.slug && a.slug === articlePayload.slug));
+      let currentBase = existingIdx >= 0 ? serverArticles[existingIdx] : null;
+      if (!currentBase && articlePayload.id) {
+        try {
+          const d1Existing = await executeD1Query('SELECT * FROM articles WHERE id = ? LIMIT 1;', [articlePayload.id], req);
+          if (d1Existing.success && d1Existing.results && d1Existing.results.length > 0) {
+            currentBase = rowToNewsItem(d1Existing.results[0]);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (!isExplicitDelete && currentBase && currentBase.image) {
+        const incomingImg = (articlePayload.image !== undefined ? articlePayload.image : articlePayload.gambar !== undefined ? articlePayload.gambar : '').trim();
+        if (!incomingImg) {
+          articlePayload.image = currentBase.image;
+          articlePayload.gambar = currentBase.gambar || currentBase.image;
+          articlePayload.captionGambar = (articlePayload.captionGambar && articlePayload.captionGambar.trim()) ? articlePayload.captionGambar : currentBase.captionGambar;
+          articlePayload.imageType = (articlePayload.imageType && articlePayload.imageType !== 'none') ? articlePayload.imageType : currentBase.imageType;
+          articlePayload.imageCredit = (articlePayload.imageCredit && articlePayload.imageCredit.trim()) ? articlePayload.imageCredit : currentBase.imageCredit;
+        }
+      }
+
       const normalized = normalizeNewsItem(articlePayload);
       const params = newsItemToSqlParams(normalized);
 
@@ -1590,7 +1658,7 @@ async function startServer() {
       const d1Result = await executeD1Query(D1_UPSERT_SQL, params, req);
 
       // Update in-memory / local storage server cache
-      const existingIdx = serverArticles.findIndex((a) => a.id === normalized.id);
+      existingIdx = serverArticles.findIndex((a) => a.id === normalized.id);
       if (existingIdx >= 0) {
         serverArticles[existingIdx] = normalized;
       } else {
@@ -1644,12 +1712,46 @@ async function startServer() {
       const updateData = req.body;
 
       const existingIdx = serverArticles.findIndex((a) => a.id === id);
-      const currentBase = existingIdx >= 0 ? serverArticles[existingIdx] : updateData;
+      let currentBase = existingIdx >= 0 ? serverArticles[existingIdx] : null;
+
+      if (!currentBase) {
+        try {
+          const d1Existing = await executeD1Query('SELECT * FROM articles WHERE id = ? LIMIT 1;', [id], req);
+          if (d1Existing.success && d1Existing.results.length > 0) {
+            currentBase = rowToNewsItem(d1Existing.results[0]);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (!currentBase) {
+        currentBase = updateData;
+      }
+
+      // Image preservation: retain existing image if editor did not submit a replacement image
+      const existingImage = (currentBase.image || currentBase.gambar || '').trim();
+      const incomingImage = (updateData.image !== undefined ? updateData.image : updateData.gambar !== undefined ? updateData.gambar : '').trim();
+      const finalImage = (incomingImage && incomingImage.length > 0) ? incomingImage : existingImage;
+      const finalImageType = (incomingImage && incomingImage.length > 0)
+        ? (updateData.imageType || currentBase.imageType || 'ai_illustration')
+        : (currentBase.imageType || updateData.imageType || 'ai_illustration');
+      const finalCaption = (updateData.captionGambar !== undefined && updateData.captionGambar.trim().length > 0)
+        ? updateData.captionGambar.trim()
+        : (currentBase.captionGambar || '');
+      const finalCredit = (updateData.imageCredit !== undefined && updateData.imageCredit.trim().length > 0)
+        ? updateData.imageCredit.trim()
+        : (currentBase.imageCredit || '');
 
       const updated = normalizeNewsItem({
         ...currentBase,
         ...updateData,
         id,
+        image: finalImage,
+        gambar: finalImage,
+        imageType: finalImageType,
+        captionGambar: finalCaption,
+        imageCredit: finalCredit,
         updatedAt: new Date().toISOString()
       });
 
@@ -1733,6 +1835,18 @@ async function startServer() {
 
       for (const item of articles) {
         if (!item || (!item.title && !item.judul)) continue;
+
+        // Image preservation in batch sync
+        let idx = serverArticles.findIndex((a) => a.id === item.id || (a.slug && a.slug === item.slug));
+        const currentBase = idx >= 0 ? serverArticles[idx] : null;
+        if (currentBase && (!item.image || !item.image.trim()) && currentBase.image) {
+          item.image = currentBase.image;
+          item.gambar = currentBase.gambar;
+          item.captionGambar = item.captionGambar || currentBase.captionGambar;
+          item.imageType = item.imageType || currentBase.imageType;
+          item.imageCredit = item.imageCredit || currentBase.imageCredit;
+        }
+
         const normalized = normalizeNewsItem(item);
         const params = newsItemToSqlParams(normalized);
 
@@ -1741,7 +1855,7 @@ async function startServer() {
           d1SuccessCount++;
         }
 
-        const idx = serverArticles.findIndex((a) => a.id === normalized.id || (a.slug && a.slug === normalized.slug));
+        idx = serverArticles.findIndex((a) => a.id === normalized.id || (a.slug && a.slug === normalized.slug));
         if (idx >= 0) {
           serverArticles[idx] = { ...serverArticles[idx], ...normalized };
           updatedCount++;

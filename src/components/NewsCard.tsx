@@ -32,7 +32,7 @@ export const NewsCard: React.FC<NewsCardProps> = ({
         {/* Thumbnail */}
         <div className="relative sm:w-56 sm:h-36 h-48 w-full shrink-0 rounded-lg overflow-hidden bg-slate-100">
           <img
-            src={getValidImageUrl(article.gambar, article.image)}
+            src={getValidImageUrl(article.gambar, article.image, article)}
             alt={article.judul || article.title}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -119,7 +119,7 @@ export const NewsCard: React.FC<NewsCardProps> = ({
         {/* Thumbnail */}
         <div className="relative h-44 w-full overflow-hidden bg-slate-100">
           <img
-            src={getValidImageUrl(article.gambar, article.image)}
+            src={getValidImageUrl(article.gambar, article.image, article)}
             alt={article.judul || article.title}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"

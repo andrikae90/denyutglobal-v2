@@ -121,7 +121,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 className="py-3 px-2 hover:bg-slate-50 rounded-xl transition cursor-pointer flex gap-3 group"
               >
                 <img
-                  src={getValidImageUrl(item.gambar, item.image)}
+                  src={getValidImageUrl(item.gambar, item.image, item)}
                   alt={item.judul || item.title}
                   referrerPolicy="no-referrer"
                   className="w-16 h-16 rounded-lg object-cover shrink-0"
