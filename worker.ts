@@ -5,6 +5,7 @@ import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml } from './src/utils/openGraph';
 import { isPublicArticle } from './src/utils/articleGuard';
+import { getArticleRedirectDestination } from './src/utils/redirects';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail, NewsletterArticlePayload } from './src/services/newsletterTemplate';
 
@@ -2203,6 +2204,22 @@ Kembalikan HANYA format JSON valid:
 
       if (rawSlug) {
         const cleanSlug = decodeURIComponent(rawSlug).trim().toLowerCase();
+
+        // 301 Permanent Redirect for legacy or de-duplicated slugs (non-looping)
+        const redirectDest = getArticleRedirectDestination(cleanSlug);
+        if (redirectDest) {
+          const redirectUrl = `${appUrl}${redirectDest}`;
+          return new Response(null, {
+            status: 301,
+            headers: {
+              'Location': redirectUrl,
+              'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+              'X-Robots-Tag': 'noindex, follow',
+              'Access-Control-Allow-Origin': '*'
+            }
+          });
+        }
+
         let article: any = null;
 
         if (env.DB) {

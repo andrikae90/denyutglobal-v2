@@ -3,6 +3,7 @@ import { CategoryId, NewsItem } from './types';
 import { editorialStore } from './data/editorialStore';
 import { newsService } from './services/newsService';
 import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId, updateCanonicalUrl, PRODUCTION_CANONICAL_DOMAIN, isPublicArticle } from './utils/slug';
+import { getArticleRedirectDestination } from './utils/redirects';
 import { updateStructuredData } from './utils/schema';
 import { updateOpenGraphMetadata } from './utils/openGraph';
 import { setEditorialTrackingDisabled } from './utils/analytics';
@@ -338,6 +339,23 @@ export default function App() {
       console.warn('URL redaksi route check error:', e);
     }
   }, [isEditorialAuthenticated, isEditorOpen]);
+
+  // Client-side canonical URL redirect synchronizer for legacy / merged slugs
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const match = window.location.pathname.match(/^\/berita\/([^/?#]+)/i);
+      if (match && match[1]) {
+        const clean = decodeURIComponent(match[1]).trim().toLowerCase();
+        const dest = getArticleRedirectDestination(clean);
+        if (dest && window.location.pathname !== dest) {
+          window.history.replaceState(null, '', dest);
+        }
+      }
+    } catch (e) {
+      console.warn('Client redirect sync check:', e);
+    }
+  }, []);
 
   // Global keyboard shortcuts (Ctrl+K or / for search, Ctrl+Shift+R for Ruang Redaksi secret shortcut)
   useEffect(() => {

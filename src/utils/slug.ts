@@ -1,5 +1,6 @@
 import { NewsItem } from '../types';
 import { isPublicArticle } from './articleGuard';
+import { getArticleRedirectDestination } from './redirects';
 
 export { isPublicArticle, extractArticleText } from './articleGuard';
 
@@ -94,6 +95,16 @@ export function findPublishedArticleBySlugOrId(
 
   // Strict guard: Only genuine published & reviewed articles are accessible publicly
   const published = articles.filter(isPublicArticle);
+
+  // 0. Permanent Redirect alias check
+  const redirectDest = getArticleRedirectDestination(cleanId);
+  if (redirectDest) {
+    const targetSlug = redirectDest.replace(/^\/berita\//, '').toLowerCase();
+    const redirected = published.find(
+      (a) => a.slug && a.slug.toLowerCase() === targetSlug
+    );
+    if (redirected) return redirected;
+  }
 
   // 1. Direct ID match (e.g. "art-003")
   const byId = published.find((a) => a.id.toLowerCase() === cleanId);

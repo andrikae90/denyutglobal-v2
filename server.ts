@@ -12,6 +12,7 @@ import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml } from './src/utils/openGraph';
 import { isPublicArticle } from './src/utils/articleGuard';
+import { getArticleRedirectDestination } from './src/utils/redirects';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail } from './src/services/newsletterTemplate';
 
@@ -3681,6 +3682,15 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
     try {
       const { slug } = req.params;
       const cleanSlug = decodeURIComponent(slug || '').trim().toLowerCase();
+
+      // 301 Permanent Redirect for legacy or de-duplicated slugs (non-looping)
+      const redirectDest = getArticleRedirectDestination(cleanSlug);
+      if (redirectDest) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-Robots-Tag', 'noindex, follow');
+        return res.redirect(301, redirectDest);
+      }
+
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
 
       let article: any = null;
