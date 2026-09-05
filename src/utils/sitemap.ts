@@ -1,5 +1,6 @@
 import { NewsItem } from '../types';
 import { slugify } from './slug';
+import { isPublicArticle } from './articleGuard';
 
 const SITEMAP_BASE_DOMAIN = 'https://denyutglobal.my.id';
 
@@ -75,13 +76,8 @@ export function generateSitemapXml(
   const now = new Date();
   const todayIso = now.toISOString().split('T')[0];
 
-  // Strictly filter only published & reviewed articles if status/reviewed are provided
-  const published = (Array.isArray(articles) ? articles : []).filter((item: SitemapArticleInput) => {
-    if (!item) return false;
-    if (typeof item.status !== 'undefined' && item.status !== 'published') return false;
-    if (typeof item.reviewed !== 'undefined' && !item.reviewed) return false;
-    return true;
-  });
+  // Strictly filter only verified, non-empty, published & reviewed articles
+  const published = (Array.isArray(articles) ? articles : []).filter(isPublicArticle);
 
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
   xml += `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`;

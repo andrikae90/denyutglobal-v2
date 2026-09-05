@@ -1502,7 +1502,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                   <li>Meningkatkan kenyamanan pengalaman pengguna.</li>
                 </ul>
                 <p className="text-xs text-slate-500">
-                  DenyutGlobal tidak menggunakan cookie pihak ketiga untuk pelacakan lintas situs. Jika Google Analytics atau layanan iklan ditambahkan di kemudian hari, kebijakan ini akan diperbarui sesuai teknologi yang benar-benar digunakan.
+                  DenyutGlobal dapat menggunakan cookie teknis dasar serta layanan mitra pihak ketiga resmi (seperti layanan analitik dan periklanan Google) yang beroperasi sesuai kebijakan privasi masing-masing.
                 </p>
               </div>
             </div>
@@ -1520,7 +1520,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                   </h2>
                 </div>
                 <div className="pl-8 text-xs sm:text-sm text-slate-600 leading-relaxed">
-                  DenyutGlobal saat ini belum menggunakan Google Analytics atau layanan analitik pihak ketiga yang mengumpulkan data pengguna. Jika layanan tersebut diaktifkan di kemudian hari, Kebijakan Privasi akan diperbarui sebelum atau pada saat penerapannya sesuai kebutuhan.
+                  DenyutGlobal dapat memanfaatkan layanan analitik seperti Google Analytics untuk mengukur lalu lintas situs dan tren interaksi konten secara agregat guna peningkatan kualitas jurnalistik, dengan menjaga kerahasiaan identitas pengguna.
                 </div>
               </div>
 
@@ -1535,7 +1535,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                   </h2>
                 </div>
                 <div className="pl-8 text-xs sm:text-sm text-slate-600 leading-relaxed">
-                  DenyutGlobal saat ini belum menampilkan iklan Google AdSense. Jika layanan periklanan diaktifkan di kemudian hari, Kebijakan Privasi akan diperbarui untuk menjelaskan penggunaan cookie, teknologi iklan, dan informasi terkait sesuai kebijakan Google yang berlaku.
+                  DenyutGlobal dapat menggunakan layanan periklanan pihak ketiga, termasuk layanan Google (seperti Google AdSense), yang dapat menggunakan cookie atau teknologi serupa sesuai kebijakan yang berlaku. Pengguna dapat mengelola preferensi iklan melalui setelan peramban masing-masing.
                 </div>
               </div>
             </div>
@@ -2483,7 +2483,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 space-y-1">
                   <strong>Pernyataan Status Periklanan:</strong>
                   <p>
-                    DenyutGlobal saat ini <strong>belum memasang iklan Google AdSense</strong> atau jaringan periklanan pihak ketiga. Jika Google AdSense atau layanan iklan lainnya diaktifkan di kemudian hari, informasi mengenai penggunaan teknologi iklan akan dijelaskan secara transparan dalam Kebijakan Privasi sesuai implementasi sebenarnya.
+                    DenyutGlobal dapat menampilkan iklan dari mitra terverifikasi termasuk jaringan periklanan resmi Google (Google AdSense). Seluruh materi promosi komersial dipisahkan secara tegas dari ruang redaksi dan artikel jurnalistik independen DenyutGlobal.
                   </p>
                 </div>
               </div>

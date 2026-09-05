@@ -1,4 +1,7 @@
 import { NewsItem } from '../types';
+import { isPublicArticle } from './articleGuard';
+
+export { isPublicArticle, extractArticleText } from './articleGuard';
 
 /**
  * Converts any title or string into a clean, SEO-friendly URL slug.
@@ -89,10 +92,8 @@ export function findPublishedArticleBySlugOrId(
   if (!identifier) return undefined;
   const cleanId = decodeURIComponent(identifier).trim().toLowerCase();
 
-  // Strict guard: Only published & reviewed articles are accessible publicly
-  const published = articles.filter(
-    (a) => a.status === 'published' && a.reviewed === true
-  );
+  // Strict guard: Only genuine published & reviewed articles are accessible publicly
+  const published = articles.filter(isPublicArticle);
 
   // 1. Direct ID match (e.g. "art-003")
   const byId = published.find((a) => a.id.toLowerCase() === cleanId);

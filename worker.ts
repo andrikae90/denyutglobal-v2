@@ -4,6 +4,7 @@ import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml } from './src/utils/openGraph';
+import { isPublicArticle } from './src/utils/articleGuard';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail, NewsletterArticlePayload } from './src/services/newsletterTemplate';
 
@@ -2131,6 +2132,19 @@ Kembalikan HANYA format JSON valid:
       }
     }
 
+    // 16.9 ADS.TXT (AdSense Direct Crawler Verification)
+    if (pathname === '/ads.txt' && (method === 'GET' || method === 'HEAD')) {
+      const adsTxt = 'google.com, pub-9993324961129647, DIRECT, f08c47fec0942fa0\n';
+      return new Response(method === 'HEAD' ? null : adsTxt, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
     // 17. ROBOTS.TXT
     if (pathname === '/robots.txt' && (method === 'GET' || method === 'HEAD')) {
       const appUrl = env.APP_URL || 'https://denyutglobal.my.id';
@@ -2147,7 +2161,7 @@ Kembalikan HANYA format JSON valid:
       return Response.redirect(`${appUrl}/sitemap.xml`, 301);
     }
 
-    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1 + Fallback Terjamin)
+    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1 + Validasi isPublicArticle)
     if (pathname === '/sitemap.xml' && (method === 'GET' || method === 'HEAD')) {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
       let articles: any[] = [];
@@ -2155,22 +2169,19 @@ Kembalikan HANYA format JSON valid:
       if (method === 'GET') {
         if (env.DB) {
           try {
-            const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' ORDER BY created_at DESC;`;
+            const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
             const res = await executeWorkerD1Query(env.DB, sql);
             if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-              articles = res.results;
+              articles = res.results.map(rowToNewsItem).filter(isPublicArticle);
             }
           } catch (d1Err) {
-            console.warn('[Worker Sitemap] D1 query fallback to cache/samples:', d1Err);
+            console.warn('[Worker Sitemap] D1 query error, falling back to static pages only:', d1Err);
+            articles = [];
           }
         }
 
-        // Fallback jika D1 kosong atau query belum mengembalikan artikel
-        if (articles.length === 0) {
-          articles = memoryArticlesCache && memoryArticlesCache.length > 0
-            ? memoryArticlesCache
-            : INITIAL_EDITORIAL_ARTICLES;
-        }
+        // Jika D1 kosong atau query gagal: JANGAN pernah gunakan SAMPLE_NEWS_ITEMS atau INITIAL_EDITORIAL_ARTICLES
+        // articles tetap [] sehingga sitemap hanya memuat URL statis utama yang valid
       }
 
       const xml = method === 'GET' ? generateSitemapXml(articles, appUrl) : null;
@@ -2185,7 +2196,7 @@ Kembalikan HANYA format JSON valid:
       });
     }
 
-    // 18.5 SERVER-SIDE OPEN GRAPH & SEO FOR ARTICLE PAGES (/berita/:slug)
+    // 18.5 SERVER-SIDE OPEN GRAPH & SSR CONTENT FALLBACK FOR ARTICLE PAGES (/berita/:slug)
     if ((pathname.startsWith('/berita/') || pathname === '/berita') && (method === 'GET' || method === 'HEAD')) {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
       const rawSlug = pathname.replace(/^\/berita\/?/, '').replace(/\/+$/, '').trim();
@@ -2196,22 +2207,29 @@ Kembalikan HANYA format JSON valid:
 
         if (env.DB) {
           try {
-            const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+            const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
             const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, cleanSlug]);
             if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-              article = rowToNewsItem(res.results[0]);
+              const candidate = rowToNewsItem(res.results[0]);
+              if (isPublicArticle(candidate)) {
+                article = candidate;
+              }
             }
           } catch (d1Err) {
             console.warn('D1 lookup failed for article page metadata:', d1Err);
           }
         }
 
-        if (!article) {
-          article = memoryArticlesCache.find(
+        if (!article && memoryArticlesCache && memoryArticlesCache.length > 0) {
+          const candidate = memoryArticlesCache.find(
             (a) =>
               ((a.slug && a.slug.toLowerCase() === cleanSlug) || a.id === cleanSlug) &&
-              a.status === 'published'
+              a.status === 'published' &&
+              a.reviewed
           );
+          if (candidate && isPublicArticle(candidate)) {
+            article = candidate;
+          }
         }
 
         if (article && env.ASSETS && typeof env.ASSETS.fetch === 'function') {

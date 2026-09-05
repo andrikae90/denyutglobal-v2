@@ -71,7 +71,21 @@ class NewsService {
       console.warn('NewsService aggregation error, switching to demo mode:', e);
     }
 
-    // Fallback: Demo data marked with explicit demo flags
+    // In production, NEVER fall back to simulated/sample demo news items.
+    // Present honest empty state or offline wire status.
+    const isDevMode = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.DEV);
+
+    if (!isDevMode) {
+      const offlineResult: AggregatedNewsResult = {
+        items: [],
+        status: 'offline',
+        totalLive: 0,
+        lastUpdated: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+      };
+      return offlineResult;
+    }
+
+    // Local development only fallback
     const demoItems: NewsItem[] = SAMPLE_NEWS_ITEMS.map((item) => ({
       ...item,
       isLiveFeed: false,

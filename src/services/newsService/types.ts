@@ -21,7 +21,7 @@ export interface NewsFeedResult {
 
 export interface AggregatedNewsResult {
   items: NewsItem[];
-  status: 'live' | 'demo';
+  status: 'live' | 'demo' | 'offline';
   totalLive: number;
   lastUpdated: string;
 }

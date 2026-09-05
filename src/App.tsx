@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { CategoryId, NewsItem } from './types';
 import { editorialStore } from './data/editorialStore';
 import { newsService } from './services/newsService';
-import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId, updateCanonicalUrl, PRODUCTION_CANONICAL_DOMAIN } from './utils/slug';
+import { getArticleUrl, getArticleSlug, findPublishedArticleBySlugOrId, updateCanonicalUrl, PRODUCTION_CANONICAL_DOMAIN, isPublicArticle } from './utils/slug';
 import { updateStructuredData } from './utils/schema';
 import { updateOpenGraphMetadata } from './utils/openGraph';
 import { setEditorialTrackingDisabled } from './utils/analytics';
@@ -34,11 +34,9 @@ export default function App() {
     return editorialStore.getAllArticles();
   });
 
-  // Public published articles (reviewed = true && status = 'published')
+  // Public published articles (verified through central Content Quality Guard)
   const publishedArticles = useMemo(() => {
-    return allEditorialArticles.filter(
-      (item) => item.status === 'published' && item.reviewed === true
-    );
+    return allEditorialArticles.filter(isPublicArticle);
   }, [allEditorialArticles]);
 
   // Synchronous resolution of article from URL on initial load
@@ -46,7 +44,7 @@ export default function App() {
     if (typeof window === 'undefined') return null;
     try {
       const all = editorialStore.getAllArticles();
-      const published = all.filter((a) => a.status === 'published' && a.reviewed === true);
+      const published = all.filter(isPublicArticle);
 
       // 1. Direct path check /berita/:slug or /artikel/:slug
       const pathname = window.location.pathname || '';
@@ -77,7 +75,7 @@ export default function App() {
       if (match && match[1]) {
         const slugOrId = decodeURIComponent(match[1]);
         const all = editorialStore.getAllArticles();
-        const published = all.filter((a) => a.status === 'published' && a.reviewed === true);
+        const published = all.filter(isPublicArticle);
         const found = findPublishedArticleBySlugOrId(published, slugOrId);
         if (!found) {
           return slugOrId;
@@ -153,7 +151,7 @@ export default function App() {
   useEffect(() => {
     if (notFoundSlug && !selectedArticle) {
       editorialStore.fetchArticleBySlugFromApi(notFoundSlug).then((fetched) => {
-        if (fetched && fetched.status === 'published' && fetched.reviewed) {
+        if (fetched && isPublicArticle(fetched)) {
           setSelectedArticle(fetched);
           setNotFoundSlug(null);
           const currentAll = editorialStore.getAllArticles();

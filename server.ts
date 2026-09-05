@@ -11,6 +11,7 @@ import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml } from './src/utils/openGraph';
+import { isPublicArticle } from './src/utils/articleGuard';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail } from './src/services/newsletterTemplate';
 
@@ -705,6 +706,13 @@ async function startServer() {
     res.json({ status: 'ok', hasGeminiKey: !!process.env.GEMINI_API_KEY });
   });
 
+  // Ads.txt (Google AdSense Crawler Verification)
+  app.get('/ads.txt', (req, res) => {
+    res.type('text/plain');
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    res.send('google.com, pub-9993324961129647, DIRECT, f08c47fec0942fa0\n');
+  });
+
   // Robots.txt
   app.get('/robots.txt', (req, res) => {
     const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
@@ -712,21 +720,19 @@ async function startServer() {
     res.send(`User-agent: *\nAllow: /\nDisallow: /redaksi\nDisallow: /editorial\n\nSitemap: ${domain}/sitemap.xml\n`);
   });
 
-  // Sitemap.xml (Dinamis dari Cloudflare D1 / Server Persistence)
+  // Sitemap.xml (Dinamis dari Cloudflare D1 / Server Persistence + isPublicArticle)
   app.get('/sitemap.xml', async (req, res) => {
     try {
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      const sql = `SELECT id, slug, title, updated_at, created_at FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+      const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
       const d1Result = await executeD1Query(sql, [], req);
       let articles: any[] = [];
 
       if (d1Result.success && Array.isArray(d1Result.results) && d1Result.results.length > 0) {
-        articles = d1Result.results;
+        articles = d1Result.results.map(rowToNewsItem).filter(isPublicArticle);
       } else {
-        // Fallback: In-Memory / File Persisted Store
-        articles = serverArticles.filter(
-          (a) => a.status === 'published' && Boolean(a.reviewed)
-        );
+        // Fallback: In-Memory / File Persisted Store filtered through Content Guard
+        articles = serverArticles.filter(isPublicArticle);
       }
 
       const xml = generateSitemapXml(articles, domain);
@@ -3682,14 +3688,20 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
       const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
 
       if (d1Result.success && d1Result.results.length > 0) {
-        article = rowToNewsItem(d1Result.results[0]);
+        const candidate = rowToNewsItem(d1Result.results[0]);
+        if (isPublicArticle(candidate)) {
+          article = candidate;
+        }
       } else {
-        const published = serverArticles.filter((a) => a.status === 'published' && a.reviewed === true);
-        article = published.find(
+        const published = serverArticles.filter(isPublicArticle);
+        const candidate = published.find(
           (a) =>
             (a.slug && a.slug.toLowerCase() === cleanSlug) ||
             (a.id && a.id.toLowerCase() === cleanSlug)
         );
+        if (candidate && isPublicArticle(candidate)) {
+          article = candidate;
+        }
       }
 
       if (article) {

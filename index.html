@@ -88,7 +88,36 @@
     <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;0,900;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-rose-100 selection:text-rose-900">
-    <div id="root"></div>
+    <div id="root">
+      <div class="max-w-5xl mx-auto px-4 py-8 text-slate-800" data-server-fallback="true">
+        <header class="border-b border-slate-200 pb-6 mb-6">
+          <p class="text-xs uppercase tracking-widest font-bold text-rose-600 mb-1">Jurnalisme Global & Verifikasi Fakta Independen</p>
+          <h1 class="text-3xl sm:text-4xl font-bold font-serif text-slate-900 leading-tight">DenyutGlobal — Menangkap Denyut Dunia, Setiap Hari</h1>
+          <p class="text-slate-600 mt-2 text-sm sm:text-base leading-relaxed">
+            Portal berita berbahasa Indonesia yang menyajikan informasi dan perkembangan terbaru dari berbagai belahan dunia secara ringkas, jelas, dan kredibel dengan pedoman kode etik jurnalistik.
+          </p>
+        </header>
+        <section class="mb-6">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">Rubrik Berita</h2>
+          <nav aria-label="Navigasi Rubrik Berita" class="flex flex-wrap gap-2 text-sm font-medium">
+            <a href="/kategori/dunia" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Dunia</a>
+            <a href="/kategori/asia" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Asia</a>
+            <a href="/kategori/indonesia" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Indonesia</a>
+            <a href="/kategori/ekonomi" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Ekonomi</a>
+            <a href="/kategori/teknologi" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Teknologi</a>
+            <a href="/kategori/sains" class="px-3 py-1.5 bg-slate-100 rounded-md hover:bg-slate-200 text-slate-700">Sains & Iklim</a>
+          </nav>
+        </section>
+        <footer class="pt-6 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap gap-4">
+          <a href="/pedoman-redaksi" class="hover:underline">Pedoman Redaksi</a>
+          <a href="/pedoman-media-siber" class="hover:underline">Pedoman Media Siber</a>
+          <a href="/kebijakan-koreksi" class="hover:underline">Kebijakan Koreksi</a>
+          <a href="/privacy-policy" class="hover:underline">Kebijakan Privasi</a>
+          <a href="/tentang-kami" class="hover:underline">Tentang Kami</a>
+          <a href="/kontak" class="hover:underline">Hubungi Kami</a>
+        </footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
