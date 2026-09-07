@@ -27,6 +27,48 @@ export function slugify(text: string): string {
 }
 
 /**
+ * Resolves a deterministic unique slug based on candidate string (custom slug or title).
+ * Pattern:
+ * - base-slug
+ * - base-slug-2
+ * - base-slug-3
+ * - base-slug-4
+ * 
+ * Rules:
+ * - If currentArticleId is provided, the article being edited is excluded from collision checks
+ * - Its own slug remains valid without unnecessary incrementation
+ */
+export function resolveDeterministicSlug(
+  candidate: string,
+  existingArticles: Array<{ id?: string; slug?: string; title?: string; judul?: string }>,
+  currentArticleId?: string
+): string {
+  const base = slugify(candidate) || (currentArticleId ? slugify(currentArticleId) : `art-${Date.now()}`);
+  
+  const occupiedSlugs = new Set<string>();
+  for (const item of existingArticles) {
+    if (!item) continue;
+    if (currentArticleId && item.id === currentArticleId) {
+      continue; // Exclude self
+    }
+    const s = item.slug ? slugify(item.slug) : '';
+    if (s) {
+      occupiedSlugs.add(s);
+    }
+  }
+
+  if (!occupiedSlugs.has(base)) {
+    return base;
+  }
+
+  let counter = 2;
+  while (occupiedSlugs.has(`${base}-${counter}`)) {
+    counter++;
+  }
+  return `${base}-${counter}`;
+}
+
+/**
  * Returns the canonical slug for an article.
  * Uses article.slug if defined and clean, otherwise generates from article title.
  */

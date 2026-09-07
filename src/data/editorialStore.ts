@@ -1,5 +1,5 @@
 import { NewsItem, ArticleStatus, ArticleSource } from '../types';
-import { slugify } from '../utils/slug';
+import { slugify, resolveDeterministicSlug } from '../utils/slug';
 
 const STORAGE_KEY = 'denyutglobal_editorial_articles_v2';
 
@@ -687,7 +687,11 @@ export class EditorialStore {
       image: article.image || article.gambar,
       namaSumber: article.sources && article.sources.length > 0 ? article.sources.map(s => s.name).join(', ') : 'Redaksi DenyutGlobal',
       urlSumber: article.sources && article.sources.length > 0 ? article.sources[0].url : 'https://denyutglobal.id',
-      slug: article.slug ? slugify(article.slug) : slugify(article.title || article.judul) || article.id,
+      slug: resolveDeterministicSlug(
+        article.slug || article.title || article.judul || article.id,
+        this.articles,
+        article.id
+      ),
       isEditorial: true,
     };
 

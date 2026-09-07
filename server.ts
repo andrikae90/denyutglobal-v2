@@ -9,10 +9,12 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
+import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
-import { injectOpenGraphHtml } from './src/utils/openGraph';
+import { injectOpenGraphHtml, injectLegalOpenGraphHtml } from './src/utils/openGraph';
 import { isPublicArticle } from './src/utils/articleGuard';
 import { getArticleRedirectDestination } from './src/utils/redirects';
+import { getLegalDocumentByPath, getLegalRedirectDestination } from './src/data/legalContent';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail } from './src/services/newsletterTemplate';
 
@@ -1658,6 +1660,12 @@ async function startServer() {
         }
       }
 
+      // Deterministic UNIQUE SLUG resolution (excluding self if editing existing id)
+      const candidateSlug = (articlePayload.slug && articlePayload.slug.trim())
+        ? articlePayload.slug
+        : (currentBase && currentBase.slug ? currentBase.slug : (articlePayload.title || articlePayload.judul || articlePayload.id));
+      articlePayload.slug = resolveDeterministicSlug(candidateSlug, serverArticles, articlePayload.id);
+
       const normalized = normalizeNewsItem(articlePayload);
       const params = newsItemToSqlParams(normalized);
 
@@ -1750,10 +1758,17 @@ async function startServer() {
         ? updateData.imageCredit.trim()
         : (currentBase.imageCredit || '');
 
+      // Deterministic UNIQUE SLUG resolution (excluding self if editing existing id)
+      const candidateSlug = (updateData.slug && updateData.slug.trim())
+        ? updateData.slug
+        : (currentBase && currentBase.slug ? currentBase.slug : (updateData.title || updateData.judul || id));
+      const finalSlug = resolveDeterministicSlug(candidateSlug, serverArticles, id);
+
       const updated = normalizeNewsItem({
         ...currentBase,
         ...updateData,
         id,
+        slug: finalSlug,
         image: finalImage,
         gambar: finalImage,
         imageType: finalImageType,
@@ -3677,6 +3692,16 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
     }
   });
 
+  // GET /artikel/:slug - 301 Permanent Redirect to canonical /berita/:slug
+  app.get(['/artikel/:slug', '/artikel/:slug/', '/artikel'], (req, res) => {
+    const slug = req.params.slug;
+    const cleanSlug = slug ? encodeURIComponent(slug) : '';
+    const target = cleanSlug ? `/berita/${cleanSlug}` : '/';
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('X-Robots-Tag', 'noindex, follow');
+    return res.redirect(301, target);
+  });
+
   // GET /berita/:slug - Server-Side Open Graph metadata rendering
   app.get(['/berita/:slug', '/berita/:slug/'], async (req, res, next) => {
     try {
@@ -3730,6 +3755,39 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
       return next();
     } catch (e) {
       console.warn('Error rendering server-side article metadata in Express:', e);
+      return next();
+    }
+  });
+
+  // GET Legal & Editorial Pages - Server-Side Open Graph & SSR metadata rendering
+  app.use(async (req, res, next) => {
+    try {
+      const pathname = req.path;
+      const redirectDest = getLegalRedirectDestination(pathname);
+      if (redirectDest) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-Robots-Tag', 'noindex, follow');
+        return res.redirect(301, redirectDest);
+      }
+
+      const legalDoc = getLegalDocumentByPath(pathname);
+      if (legalDoc && (req.method === 'GET' || req.method === 'HEAD')) {
+        const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+        let htmlPath = path.join(process.cwd(), 'dist', 'index.html');
+        if (!fs.existsSync(htmlPath)) {
+          htmlPath = path.join(process.cwd(), 'index.html');
+        }
+        if (fs.existsSync(htmlPath)) {
+          const html = fs.readFileSync(htmlPath, 'utf-8');
+          const modifiedHtml = injectLegalOpenGraphHtml(html, legalDoc, domain);
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400');
+          return res.send(modifiedHtml);
+        }
+      }
+      return next();
+    } catch (err) {
+      console.warn('Error handling legal page SSR in Express:', err);
       return next();
     }
   });

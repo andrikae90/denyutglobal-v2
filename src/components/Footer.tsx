@@ -30,12 +30,14 @@ interface FooterProps {
   onSelectCategory: (category: CategoryId) => void;
   onOpenLegalModal: (type: NonNullable<LegalModalType>) => void;
   onOpenSubscription?: () => void;
+  onNavigateLegal?: (path: string) => void;
 }
 
 export const Footer: React.FC<FooterProps> = ({
   onSelectCategory,
   onOpenLegalModal,
-  onOpenSubscription
+  onOpenSubscription,
+  onNavigateLegal
 }) => {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'already_subscribed' | 'unsubscribed_success' | 'error'>('idle');
@@ -255,13 +257,18 @@ export const Footer: React.FC<FooterProps> = ({
 
             <p className="text-[11px] text-slate-400 leading-normal">
               Email Anda digunakan untuk layanan newsletter/Daily Brief DenyutGlobal dan tidak digunakan untuk tujuan lain tanpa dasar yang sesuai.{' '}
-              <button
-                type="button"
-                onClick={() => onOpenLegalModal('privasi')}
+              <a
+                href="/privacy-policy"
+                onClick={(e) => {
+                  if (onNavigateLegal) {
+                    e.preventDefault();
+                    onNavigateLegal('/privacy-policy');
+                  }
+                }}
                 className="text-slate-300 hover:text-white underline cursor-pointer"
               >
                 Kebijakan Privasi
-              </button>
+              </a>
             </p>
           </div>
         </div>
@@ -331,67 +338,124 @@ export const Footer: React.FC<FooterProps> = ({
             </h4>
             <ul className="space-y-1.5 text-xs">
               <li>
-                <button
-                  id="footer-tentang-denyutglobal-button"
-                  onClick={() => onOpenLegalModal('tentang')}
+                <a
+                  id="footer-tentang-denyutglobal-link"
+                  href="/tentang-kami"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/tentang-kami');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
                   Tentang DenyutGlobal
-                </button>
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-kontak-button"
-                  onClick={() => onOpenLegalModal('kontak')}
+                <a
+                  id="footer-kontak-link"
+                  href="/kontak"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/kontak');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
-                  Kontak
-                </button>
+                  Kontak Redaksi
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-pedoman-redaksi-button"
-                  onClick={() => onOpenLegalModal('pedoman')}
+                <a
+                  id="footer-pedoman-redaksi-link"
+                  href="/pedoman-redaksi"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/pedoman-redaksi');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
                   Pedoman Redaksi
-                </button>
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-kebijakan-koreksi-button"
-                  onClick={() => onOpenLegalModal('koreksi')}
+                <a
+                  id="footer-pedoman-media-siber-link"
+                  href="/pedoman-media-siber"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/pedoman-media-siber');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
-                  Kebijakan Koreksi
-                </button>
+                  Pedoman Media Siber
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-kebijakan-privasi-button"
-                  onClick={() => onOpenLegalModal('privasi')}
+                <a
+                  id="footer-kebijakan-koreksi-link"
+                  href="/kebijakan-koreksi"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/kebijakan-koreksi');
+                    }
+                  }}
+                  className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
+                >
+                  Kebijakan Koreksi &amp; Hak Jawab
+                </a>
+              </li>
+              <li>
+                <a
+                  id="footer-kebijakan-privasi-link"
+                  href="/privacy-policy"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/privacy-policy');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
                   Kebijakan Privasi
-                </button>
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-disclaimer-button"
-                  onClick={() => onOpenLegalModal('disclaimer')}
+                <a
+                  id="footer-disclaimer-link"
+                  href="/disclaimer"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/disclaimer');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
                   Disclaimer
-                </button>
+                </a>
               </li>
               <li>
-                <button
-                  id="footer-ketentuan-penggunaan-button"
-                  onClick={() => onOpenLegalModal('ketentuan')}
+                <a
+                  id="footer-ketentuan-layanan-link"
+                  href="/ketentuan-layanan"
+                  onClick={(e) => {
+                    if (onNavigateLegal) {
+                      e.preventDefault();
+                      onNavigateLegal('/ketentuan-layanan');
+                    }
+                  }}
                   className="w-full text-left text-slate-400 hover:text-white transition-colors cursor-pointer py-1 block"
                 >
-                  Syarat & Ketentuan
-                </button>
+                  Ketentuan Layanan
+                </a>
               </li>
             </ul>
           </div>
@@ -406,12 +470,18 @@ export const Footer: React.FC<FooterProps> = ({
               Seluruh proses penulisan dan asistensi editorial diverifikasi secara ketat berdasar 13 Butir Standar Pedoman Redaksi.
             </p>
             <div className="pt-2 border-t border-slate-800 text-[11px]">
-              <button
-                onClick={() => onOpenLegalModal('pedoman')}
+              <a
+                href="/pedoman-redaksi"
+                onClick={(e) => {
+                  if (onNavigateLegal) {
+                    e.preventDefault();
+                    onNavigateLegal('/pedoman-redaksi');
+                  }
+                }}
                 className="text-rose-400 hover:underline font-semibold cursor-pointer"
               >
                 Lihat Pedoman Redaksi →
-              </button>
+              </a>
             </div>
           </div>
         </div>

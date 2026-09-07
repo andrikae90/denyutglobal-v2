@@ -23,6 +23,9 @@ import { BookmarksDrawer } from './components/BookmarksDrawer';
 import { SearchModal } from './components/SearchModal';
 import { LegalModal, LegalModalType } from './components/LegalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
+import { LegalPageView } from './components/LegalPageView';
+import { getLegalDocumentByPath, isLegalPath } from './data/legalContent';
+import { updateClientLegalMetadata } from './utils/openGraph';
 import { Footer } from './components/Footer';
 import { Check, ArrowUp } from 'lucide-react';
 
@@ -87,6 +90,38 @@ export default function App() {
     }
     return null;
   });
+
+  // Active Legal Route tracking (for /tentang-kami, /kontak, /privacy-policy, /ketentuan-layanan, /disclaimer, /pedoman-redaksi, /pedoman-media-siber, /kebijakan-koreksi)
+  const [activeLegalPath, setActiveLegalPath] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const pathname = window.location.pathname || '';
+      const doc = getLegalDocumentByPath(pathname);
+      if (doc) {
+        // If accessed via an alias (e.g. /terms or /privacy), replace with canonical path
+        if (pathname !== doc.path) {
+          window.history.replaceState(null, '', doc.path);
+        }
+        return doc.path;
+      }
+    } catch (e) {
+      console.warn('Initial legal URL check error:', e);
+    }
+    return null;
+  });
+
+  const activeLegalDoc = useMemo(() => {
+    return activeLegalPath ? getLegalDocumentByPath(activeLegalPath) : null;
+  }, [activeLegalPath]);
+
+  // Sync client metadata (Title, Meta Description, Canonical URL, OG)
+  useEffect(() => {
+    if (activeLegalDoc) {
+      updateClientLegalMetadata(activeLegalDoc);
+    } else if (!selectedArticle) {
+      updateClientLegalMetadata(null);
+    }
+  }, [activeLegalDoc, selectedArticle]);
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
@@ -379,8 +414,37 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleOpenEditorialDesk]);
 
+  // Navigation handler for legal documents (/tentang-kami, /kontak, etc.)
+  const handleNavigateLegal = useCallback((targetPath: string) => {
+    const doc = getLegalDocumentByPath(targetPath);
+    if (doc) {
+      setActiveLegalPath(doc.path);
+      setSelectedArticle(null);
+      setNotFoundSlug(null);
+      setIsSearchOpen(false);
+      setIsBookmarksOpen(false);
+      setLegalModalType(null);
+      if (window.location.pathname !== doc.path) {
+        window.history.pushState({ legalPath: doc.path }, '', doc.path);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
+  // Return to homepage from legal view
+  const handleBackToHomeFromLegal = useCallback(() => {
+    setActiveLegalPath(null);
+    setSelectedArticle(null);
+    setNotFoundSlug(null);
+    if (window.location.pathname !== '/') {
+      window.history.pushState(null, '', '/');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
   // Helper to open an article and update history with /berita/[slug]
   const handleOpenArticle = useCallback((article: NewsItem) => {
+    setActiveLegalPath(null);
     setSelectedArticle(article);
     setNotFoundSlug(null);
     const slug = getArticleSlug(article);
@@ -392,6 +456,7 @@ export default function App() {
 
   // Helper to close the article modal and return history to /
   const handleCloseArticle = useCallback(() => {
+    setActiveLegalPath(null);
     setSelectedArticle(null);
     setNotFoundSlug(null);
     const currentPath = window.location.pathname;
@@ -406,6 +471,18 @@ export default function App() {
     const handlePopState = () => {
       try {
         const pathname = window.location.pathname || '';
+
+        // 0. Check if URL is in legal routes
+        const legalDoc = getLegalDocumentByPath(pathname);
+        if (legalDoc) {
+          setActiveLegalPath(legalDoc.path);
+          setSelectedArticle(null);
+          setNotFoundSlug(null);
+          return;
+        } else {
+          setActiveLegalPath(null);
+        }
+
         let articleIdentifier: string | null = null;
         let isBeritaPath = false;
 
@@ -456,6 +533,11 @@ export default function App() {
   // Synchronize canonical URL and browser history for active article or homepage
   useEffect(() => {
     try {
+      // Jika halaman legal sedang aktif, biarkan metadata legal (title, description, canonical, OG) dikelola oleh activeLegalDoc
+      if (activeLegalDoc) {
+        return;
+      }
+
       if (selectedArticle && selectedArticle.status === 'published' && selectedArticle.reviewed) {
         const slug = getArticleSlug(selectedArticle);
         const targetPath = `/berita/${slug}`;
@@ -486,7 +568,7 @@ export default function App() {
     } catch (e) {
       console.warn('URL or canonical synchronization failed:', e);
     }
-  }, [selectedArticle]);
+  }, [selectedArticle, activeLegalDoc]);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -585,6 +667,12 @@ export default function App() {
   };
 
   const handleSelectCategory = (catId: CategoryId) => {
+    setActiveLegalPath(null);
+    setSelectedArticle(null);
+    setNotFoundSlug(null);
+    if (window.location.pathname !== '/') {
+      window.history.pushState(null, '', '/');
+    }
     setActiveCategory(catId);
     if (catId !== 'semua') {
       const section = document.getElementById('latest-news-section');
@@ -691,10 +779,17 @@ export default function App() {
         onOpenSubscription={() => setIsSubscriptionOpen(true)}
       />
 
-      {/* Main Page Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* If category is 'semua' (Beranda), show the rich editorial portal layout */}
-        {activeCategory === 'semua' && !searchQuery ? (
+      {/* Main Page Body or Dedicated Legal Page View */}
+      {activeLegalDoc ? (
+        <LegalPageView
+          document={activeLegalDoc}
+          onNavigateLegal={handleNavigateLegal}
+          onBackToHome={handleBackToHomeFromLegal}
+        />
+      ) : (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          {/* If category is 'semua' (Beranda), show the rich editorial portal layout */}
+          {activeCategory === 'semua' && !searchQuery ? (
           <>
             {/* 1. Hero / Berita Utama */}
             {heroItem && (
@@ -796,6 +891,7 @@ export default function App() {
           </div>
         )}
       </main>
+    )}
 
       {/* Floating Back to Top button */}
       {showScrollTop && (
@@ -922,6 +1018,7 @@ export default function App() {
       <Footer
         onSelectCategory={handleSelectCategory}
         onOpenLegalModal={setLegalModalType}
+        onNavigateLegal={handleNavigateLegal}
         onOpenSubscription={() => setIsSubscriptionOpen(true)}
       />
     </div>

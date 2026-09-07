@@ -2,10 +2,12 @@ import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } fro
 import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
 import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
+import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
-import { injectOpenGraphHtml } from './src/utils/openGraph';
+import { injectOpenGraphHtml, injectLegalOpenGraphHtml } from './src/utils/openGraph';
 import { isPublicArticle } from './src/utils/articleGuard';
 import { getArticleRedirectDestination } from './src/utils/redirects';
+import { getLegalDocumentByPath, getLegalRedirectDestination, isLegalPath } from './src/data/legalContent';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
 import { generateNewsletterEmail, NewsletterArticlePayload } from './src/services/newsletterTemplate';
 
@@ -1231,6 +1233,12 @@ export default {
           articlePayload.imageCredit = articlePayload.imageCredit || currentBase.imageCredit;
         }
 
+        // Deterministic UNIQUE SLUG resolution (excluding self if editing existing id)
+        const candidateSlug = (articlePayload.slug && articlePayload.slug.trim())
+          ? articlePayload.slug
+          : (currentBase && currentBase.slug ? currentBase.slug : (articlePayload.title || articlePayload.judul || articlePayload.id));
+        articlePayload.slug = resolveDeterministicSlug(candidateSlug, memoryArticlesCache, articlePayload.id);
+
         const normalized = normalizeNewsItem(articlePayload);
         const params = newsItemToSqlParams(normalized);
 
@@ -1321,10 +1329,17 @@ export default {
           ? updateData.imageCredit.trim()
           : (currentBase.imageCredit || '');
 
+        // Deterministic UNIQUE SLUG resolution (excluding self if editing existing id)
+        const candidateSlug = (updateData.slug && updateData.slug.trim())
+          ? updateData.slug
+          : (currentBase && currentBase.slug ? currentBase.slug : (updateData.title || updateData.judul || id));
+        const finalSlug = resolveDeterministicSlug(candidateSlug, memoryArticlesCache, id);
+
         const updated = normalizeNewsItem({
           ...currentBase,
           ...updateData,
           id,
+          slug: finalSlug,
           image: finalImage,
           gambar: finalImage,
           imageType: finalImageType,
@@ -2197,6 +2212,22 @@ Kembalikan HANYA format JSON valid:
       });
     }
 
+    // 18.4 ARTICLE CANONICAL REDIRECT (/artikel/:slug -> /berita/:slug)
+    if ((pathname.startsWith('/artikel/') || pathname === '/artikel') && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      const rawSlug = pathname.replace(/^\/artikel\/?/, '').replace(/\/+$/, '').trim();
+      const targetPath = rawSlug ? `/berita/${rawSlug}` : '/';
+      return new Response(null, {
+        status: 301,
+        headers: {
+          'Location': `${appUrl}${targetPath}`,
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          'X-Robots-Tag': 'noindex, follow',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
     // 18.5 SERVER-SIDE OPEN GRAPH & SSR CONTENT FALLBACK FOR ARTICLE PAGES (/berita/:slug)
     if ((pathname.startsWith('/berita/') || pathname === '/berita') && (method === 'GET' || method === 'HEAD')) {
       const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
@@ -2267,6 +2298,45 @@ Kembalikan HANYA format JSON valid:
           } catch (assetErr) {
             console.warn('Failed to rewrite article HTML metadata:', assetErr);
           }
+        }
+      }
+    }
+
+    // 18.6 SERVER-SIDE OPEN GRAPH & SSR CONTENT FALLBACK FOR LEGAL & EDITORIAL PAGES
+    const legalRedirect = getLegalRedirectDestination(pathname);
+    if (legalRedirect && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      return new Response(null, {
+        status: 301,
+        headers: {
+          'Location': `${appUrl}${legalRedirect}`,
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          'X-Robots-Tag': 'noindex, follow',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    const legalDoc = getLegalDocumentByPath(pathname);
+    if (legalDoc && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      if (env.ASSETS && typeof env.ASSETS.fetch === 'function') {
+        try {
+          const assetRes = await env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+          if (assetRes.status === 200) {
+            const html = await assetRes.text();
+            const modifiedHtml = injectLegalOpenGraphHtml(html, legalDoc, appUrl);
+            return new Response(method === 'HEAD' ? null : modifiedHtml, {
+              status: 200,
+              headers: {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400',
+                'Vary': 'Accept-Encoding'
+              }
+            });
+          }
+        } catch (assetErr) {
+          console.warn('Failed to rewrite legal HTML metadata:', assetErr);
         }
       }
     }

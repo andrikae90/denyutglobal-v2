@@ -51,15 +51,14 @@ export const SITEMAP_STATIC_PAGES = [
   { path: '/kategori/indonesia', priority: '0.8', changefreq: 'hourly' },
   { path: '/kategori/analisis-opini', priority: '0.8', changefreq: 'daily' },
   { path: '/kategori/sosial-budaya', priority: '0.8', changefreq: 'daily' },
+  { path: '/tentang-kami', priority: '0.6', changefreq: 'monthly' },
+  { path: '/kontak', priority: '0.6', changefreq: 'monthly' },
+  { path: '/privacy-policy', priority: '0.6', changefreq: 'monthly' },
+  { path: '/ketentuan-layanan', priority: '0.6', changefreq: 'monthly' },
+  { path: '/disclaimer', priority: '0.6', changefreq: 'monthly' },
   { path: '/pedoman-redaksi', priority: '0.6', changefreq: 'monthly' },
   { path: '/pedoman-media-siber', priority: '0.6', changefreq: 'monthly' },
-  { path: '/kebijakan-koreksi', priority: '0.6', changefreq: 'monthly' },
-  { path: '/laporkan-koreksi', priority: '0.6', changefreq: 'monthly' },
-  { path: '/privacy-policy', priority: '0.6', changefreq: 'monthly' },
-  { path: '/terms', priority: '0.6', changefreq: 'monthly' },
-  { path: '/disclaimer', priority: '0.6', changefreq: 'monthly' },
-  { path: '/kontak', priority: '0.6', changefreq: 'monthly' },
-  { path: '/tentang-kami', priority: '0.6', changefreq: 'monthly' }
+  { path: '/kebijakan-koreksi', priority: '0.6', changefreq: 'monthly' }
 ];
 
 /**

@@ -13,7 +13,7 @@ import {
   ArticleRevisionResult
 } from '../types';
 import { CATEGORIES } from '../data/categories';
-import { slugify } from '../utils/slug';
+import { slugify, resolveDeterministicSlug } from '../utils/slug';
 import { buildCompleteDraftFromReference, buildDraftFromRadarItem, validateDraftForReview } from '../utils/referenceAutoDraft';
 import { generateThematicSvgIllustration } from '../utils/aiIllustrationGenerator';
 import { radarService } from '../services/radarService';
@@ -1025,7 +1025,8 @@ STATUS ILUSTRASI AI: ${illustrationStatus} (${imageTypeLabel})
     const now = new Date();
     const id = editingId || `art-${Date.now()}`;
     const existingArticle = editingId ? articles.find(a => a.id === editingId) : null;
-    const slug = (customSlug.trim() ? slugify(customSlug) : '') || existingArticle?.slug || slugify(title) || id;
+    const candidateSlug = customSlug.trim() || (existingArticle && !customSlug.trim() ? existingArticle.slug : '') || title || id;
+    const slug = resolveDeterministicSlug(candidateSlug, articles, editingId || undefined);
     const isExistingPublished = !!(existingArticle && (existingArticle.status === 'published' || existingArticle.publishedAt));
 
     const initialTanggal = isExistingPublished && existingArticle?.tanggal 
