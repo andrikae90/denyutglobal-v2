@@ -302,7 +302,7 @@ export const Footer: React.FC<FooterProps> = ({
                 <span>Status & Transparansi Redaksi</span>
               </p>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                DenyutGlobal saat ini merupakan portal berita digital yang sedang dikembangkan. Informasi mengenai struktur organisasi, kontak, dan operasional redaksi hanya ditampilkan sesuai keadaan sebenarnya dan tidak dibuat-buat.
+                DenyutGlobal adalah portal berita digital berbahasa Indonesia yang menyajikan informasi dan perkembangan terkini dari berbagai bidang. Setiap berita diterbitkan melalui proses editorial dan dapat diperbarui apabila terdapat koreksi atau informasi baru. Informasi mengenai struktur organisasi, kontak, dan operasional redaksi ditampilkan sesuai keadaan sebenarnya dan tidak dibuat-buat.
               </p>
             </div>
           </div>

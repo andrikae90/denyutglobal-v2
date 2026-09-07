@@ -469,7 +469,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, onSelectM
                   Catatan Status Portal
                 </div>
                 <p className="leading-relaxed">
-                  DenyutGlobal saat ini merupakan portal berita digital yang sedang dikembangkan. Informasi mengenai struktur organisasi, kontak, dan operasional redaksi hanya boleh ditampilkan sesuai keadaan sebenarnya dan tidak boleh dibuat-buat.
+                  DenyutGlobal adalah portal berita digital berbahasa Indonesia yang menyajikan informasi dan perkembangan terkini dari berbagai bidang. Setiap berita diterbitkan melalui proses editorial dan dapat diperbarui apabila terdapat koreksi atau informasi baru. Informasi mengenai struktur organisasi, kontak, dan operasional redaksi ditampilkan sesuai keadaan sebenarnya dan tidak dibuat-buat.
                 </p>
               </div>
             </div>

@@ -561,29 +561,32 @@ export default {
     // 4. PUBLIC ARTICLES (GET /api/articles)
     if (pathname === '/api/articles' && method === 'GET') {
       if (env.DB) {
-        const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY published_at DESC, created_at DESC;`;
-        const res = await executeWorkerD1Query(env.DB, sql);
-        if (res.success) {
-          const articles = (res.results || []).map(rowToNewsItem);
+        try {
+          const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY published_at DESC, created_at DESC;`;
+          const res = await executeWorkerD1Query(env.DB, sql);
+          if (res.success) {
+            const articles = (res.results || []).map(rowToNewsItem);
+            return jsonResponse({
+              success: true,
+              source: 'd1_binding',
+              count: articles.length,
+              data: articles
+            });
+          }
+        } catch (dbErr) {
+          console.error('D1 query failed for public articles:', dbErr);
           return jsonResponse({
-            success: true,
-            source: 'd1_binding',
-            count: articles.length,
-            data: articles
-          });
+            success: false,
+            error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
+          }, 503);
         }
       }
 
-      // Fallback runtime hanya jika env.DB tidak tersedia atau query database error total
-      const fallbackPublished = memoryArticlesCache.filter(
-        (a) => a.status === 'published' && Boolean(a.reviewed)
-      );
+      // Fail-closed: Jangan pernah menampilkan INITIAL_EDITORIAL_ARTICLES atau mock cache ke publik jika D1 tidak tersedia
       return jsonResponse({
-        success: true,
-        source: 'server_fallback',
-        count: fallbackPublished.length,
-        data: fallbackPublished
-      });
+        success: false,
+        error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
+      }, 503);
     }
 
     // 4.5. PUBLIC ARTICLE IMAGE (GET /api/articles/:slug/image)
@@ -602,40 +605,53 @@ export default {
 
       if (env.DB) {
         try {
-          const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+          const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
           const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
-          if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-            articleData = res.results[0];
-            rawImage = (articleData.image || '').trim();
+          if (res.success) {
+            if (Array.isArray(res.results) && res.results.length > 0) {
+              articleData = res.results[0];
+              rawImage = (articleData.image || '').trim();
+            } else {
+              // D1 berhasil dieksekusi tetapi artikel tidak ada atau belum dipublikasikan
+              return new Response('Article Not Found', {
+                status: 404,
+                headers: {
+                  'Content-Type': 'text/plain; charset=utf-8',
+                  'Cache-Control': 'public, max-age=300'
+                }
+              });
+            }
+          } else {
+            return new Response('Service Unavailable', {
+              status: 503,
+              headers: {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-cache'
+              }
+            });
           }
         } catch (e) {
           console.warn('Error fetching article image from D1:', e);
+          return new Response('Service Unavailable', {
+            status: 503,
+            headers: {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'Cache-Control': 'no-cache'
+            }
+          });
         }
+      } else {
+        // Tanpa binding D1, fail-closed
+        return new Response('Service Unavailable', {
+          status: 503,
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache'
+          }
+        });
       }
 
-      if (!articleData) {
-        const found = memoryArticlesCache.find(
-          (a) =>
-            (a.slug && a.slug.toLowerCase() === slug) || a.id === slug
-        );
-        if (found) {
-          articleData = found;
-          rawImage = (found.image || found.gambar || '').trim();
-        }
-      }
-
-      if (!articleData) {
-        const foundInit = INITIAL_EDITORIAL_ARTICLES.find(
-          (a) =>
-            (a.slug && a.slug.toLowerCase() === slug) || a.id === slug
-        );
-        if (foundInit) {
-          articleData = foundInit;
-          rawImage = (foundInit.image || foundInit.gambar || '').trim();
-        }
-      }
-
-      // If article was not found at all, return 404
+      // If article was not found, return 404
       if (!articleData) {
         return new Response('Article Not Found', {
           status: 404,
@@ -738,40 +754,37 @@ export default {
     if (pathname.startsWith('/api/articles/') && method === 'GET') {
       const slug = decodeURIComponent(pathname.replace('/api/articles/', '').trim());
       if (env.DB) {
-        const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
-        const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
-        if (res.success) {
-          if (res.results.length > 0) {
+        try {
+          const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
+          const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
+          if (res.success) {
+            if (res.results.length > 0) {
+              return jsonResponse({
+                success: true,
+                source: 'd1_binding',
+                data: rowToNewsItem(res.results[0])
+              });
+            }
+            // D1 query sukses namun artikel tidak ditemukan atau belum dipublikasikan
             return jsonResponse({
-              success: true,
-              source: 'd1_binding',
-              data: rowToNewsItem(res.results[0])
-            });
+              success: false,
+              error: `Artikel dengan slug atau ID "${slug}" tidak ditemukan.`
+            }, 404);
           }
-          // D1 query sukses namun artikel tidak ditemukan atau belum dipublikasikan
+        } catch (dbErr) {
+          console.error('D1 query failed for article by slug:', dbErr);
           return jsonResponse({
             success: false,
-            error: `Artikel dengan slug atau ID "${slug}" tidak ditemukan.`
-          }, 404);
+            error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
+          }, 503);
         }
       }
 
-      // Fallback runtime HANYA jika binding D1 tidak tersedia atau database error
-      const found = memoryArticlesCache.find(
-        (a) => (a.slug === slug || a.id === slug) && a.status === 'published' && Boolean(a.reviewed)
-      );
-      if (found) {
-        return jsonResponse({
-          success: true,
-          source: 'server_fallback',
-          data: found
-        });
-      }
-
+      // Fail-closed: Jika database D1 tidak tersedia, kembalikan 503 dan jangan pernah menggunakan seed/memory cache
       return jsonResponse({
         success: false,
-        error: `Artikel dengan slug atau ID "${slug}" tidak ditemukan.`
-      }, 404);
+        error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
+      }, 503);
     }
 
     // 5.5 SUBSCRIBE NEWSLETTER (POST /api/subscribe)
@@ -2266,35 +2279,19 @@ Kembalikan HANYA format JSON valid:
         }
 
         let article: any = null;
-        let d1Checked = false;
 
         if (env.DB) {
           try {
             const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
             const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, cleanSlug]);
-            if (res.success) {
-              d1Checked = true;
-              if (Array.isArray(res.results) && res.results.length > 0) {
-                const candidate = rowToNewsItem(res.results[0]);
-                if (isPublicArticle(candidate)) {
-                  article = candidate;
-                }
+            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
+              const candidate = rowToNewsItem(res.results[0]);
+              if (isPublicArticle(candidate)) {
+                article = candidate;
               }
             }
           } catch (d1Err) {
             console.warn('D1 lookup failed for article page metadata:', d1Err);
-          }
-        }
-
-        if (!d1Checked && !article && memoryArticlesCache && memoryArticlesCache.length > 0) {
-          const candidate = memoryArticlesCache.find(
-            (a) =>
-              ((a.slug && a.slug.toLowerCase() === cleanSlug) || a.id === cleanSlug) &&
-              a.status === 'published' &&
-              a.reviewed
-          );
-          if (candidate && isPublicArticle(candidate)) {
-            article = candidate;
           }
         }
 

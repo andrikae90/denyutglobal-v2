@@ -1461,36 +1461,18 @@ async function startServer() {
       let rawImage = '';
       let articleData: any = null;
 
-      const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' LIMIT 1;`;
+      const sql = `SELECT title, category, category_label, location, image, status, reviewed FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
       const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
 
       if (d1Result.success && d1Result.results.length > 0) {
         articleData = d1Result.results[0];
         rawImage = (articleData.image || '').trim();
-      }
-
-      if (!articleData) {
-        const found = serverArticles.find(
-          (a) =>
-            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
-            (a.id && a.id.toLowerCase() === cleanSlug)
-        );
-        if (found) {
-          articleData = found;
-          rawImage = (found.image || found.gambar || '').trim();
-        }
-      }
-
-      if (!articleData) {
-        const foundInit = INITIAL_EDITORIAL_ARTICLES.find(
-          (a) =>
-            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
-            (a.id && a.id.toLowerCase() === cleanSlug)
-        );
-        if (foundInit) {
-          articleData = foundInit;
-          rawImage = (foundInit.image || foundInit.gambar || '').trim();
-        }
+      } else if (d1Result.success) {
+        // D1 query sukses tetapi artikel tidak ditemukan
+        return res.status(404).send('Article Not Found');
+      } else {
+        // Database error / unavailable
+        return res.status(503).send('Service Unavailable');
       }
 
       // If article does not exist, return 404
@@ -1569,33 +1551,14 @@ async function startServer() {
         });
       }
 
-      // Fallback runtime HANYA jika D1 tidak terkonfigurasi atau query gagal total
-      const published = serverArticles.filter(
-        (a) => a.status === 'published' && a.reviewed === true
-      );
-
-      const found = published.find(
-        (a) =>
-          (a.slug && a.slug.toLowerCase() === cleanSlug) ||
-          (a.id && a.id.toLowerCase() === cleanSlug) ||
-          ((a.title || a.judul) && (a.title || a.judul).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') === cleanSlug)
-      );
-
-      if (found) {
-        return res.json({
-          success: true,
-          source: 'server_store',
-          data: found
-        });
-      }
-
-      return res.status(404).json({
+      // Fail-closed: Jika database D1 gagal, kembalikan 503 dan jangan gunakan fallback lokal
+      return res.status(503).json({
         success: false,
-        error: 'Artikel tidak ditemukan atau belum dipublikasikan.'
+        error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
       });
     } catch (err: any) {
       console.error('Error fetching public article by slug:', err);
-      return res.status(500).json({
+      return res.status(503).json({
         success: false,
         error: 'Gagal memuat artikel.'
       });
@@ -3732,16 +3695,6 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
       if (d1Result.success && d1Result.results.length > 0) {
         const candidate = rowToNewsItem(d1Result.results[0]);
         if (isPublicArticle(candidate)) {
-          article = candidate;
-        }
-      } else {
-        const published = serverArticles.filter(isPublicArticle);
-        const candidate = published.find(
-          (a) =>
-            (a.slug && a.slug.toLowerCase() === cleanSlug) ||
-            (a.id && a.id.toLowerCase() === cleanSlug)
-        );
-        if (candidate && isPublicArticle(candidate)) {
           article = candidate;
         }
       }
