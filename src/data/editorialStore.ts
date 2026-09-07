@@ -376,7 +376,8 @@ export class EditorialStore {
         console.warn('Failed to load editorial articles from localStorage', e);
       }
     }
-    this.articles = [...INITIAL_EDITORIAL_ARTICLES];
+    // Inisialisasi awal kosong (Fail-closed: tidak menggunakan seed data untuk runtime/public state)
+    this.articles = [];
     return this.articles;
   }
 

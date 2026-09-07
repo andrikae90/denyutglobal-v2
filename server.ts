@@ -7,7 +7,6 @@ import { GoogleGenAI } from '@google/genai';
 
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
 import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
-import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
@@ -86,8 +85,8 @@ function loadServerArticles(): NewsItem[] {
   } catch (e) {
     console.warn('Could not read persistent articles file, using default seed:', e);
   }
-  // Initialize with initial editorial articles if empty
-  return [...INITIAL_EDITORIAL_ARTICLES];
+  // Fail-closed: Inisialisasi awal kosong tanpa artikel seed/demo
+  return [];
 }
 
 function saveServerArticles(items: NewsItem[]): boolean {
@@ -734,8 +733,8 @@ async function startServer() {
       if (d1Result.success && Array.isArray(d1Result.results) && d1Result.results.length > 0) {
         articles = d1Result.results.map(rowToNewsItem).filter(isPublicArticle);
       } else {
-        // Fallback: In-Memory / File Persisted Store filtered through Content Guard
-        articles = serverArticles.filter(isPublicArticle);
+        // Fail-closed: Jika D1 kosong atau query gagal, sitemap hanya memuat URL statis utama
+        articles = [];
       }
 
       const xml = generateSitemapXml(articles, domain);
@@ -1413,36 +1412,14 @@ async function startServer() {
         });
       }
 
-      // Fallback runtime HANYA jika D1 tidak terkonfigurasi atau query gagal total
-      let published = serverArticles.filter(
-        (a) => a.status === 'published' && a.reviewed === true
-      );
-
-      if (category && typeof category === 'string' && category !== 'semua') {
-        published = published.filter(
-          (a) => (a.category || a.kategori || '').toLowerCase() === category.toLowerCase()
-        );
-      }
-
-      published.sort((a, b) => {
-        const timeA = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-        const timeB = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-        return timeB - timeA;
-      });
-
-      const numLimit = limit ? Math.max(1, parseInt(limit as string, 10)) : published.length;
-      const numOffset = offset ? Math.max(0, parseInt(offset as string, 10)) : 0;
-      const paged = published.slice(numOffset, numOffset + numLimit);
-
-      return res.json({
-        success: true,
-        source: 'server_store',
-        count: published.length,
-        data: paged
+      // Fail-closed: Jangan pernah menampilkan serverArticles / mock seed ke publik jika D1 tidak tersedia
+      return res.status(503).json({
+        success: false,
+        error: 'Layanan basis data berita sementara tidak tersedia. Silakan coba beberapa saat lagi.'
       });
     } catch (err: any) {
       console.error('Error fetching public articles:', err);
-      return res.status(500).json({
+      return res.status(503).json({
         success: false,
         error: 'Gagal memuat artikel publik.'
       });

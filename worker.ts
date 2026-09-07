@@ -1,6 +1,5 @@
 import { buildEditorialIllustrationPrompt, generateThematicSvgIllustration } from './src/utils/aiIllustrationGenerator';
 import { generateThematicCategorySvgRaw } from './src/utils/thematicSvg';
-import { INITIAL_EDITORIAL_ARTICLES } from './src/data/editorialStore';
 import { NewsItem } from './src/types';
 import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
@@ -46,8 +45,8 @@ export interface Env {
   [key: string]: any;
 }
 
-// In-Memory Fallback Cache for runtime
-let memoryArticlesCache: NewsItem[] = [...INITIAL_EDITORIAL_ARTICLES];
+// In-Memory Fallback Cache for runtime (starts empty, populated only by active D1 queries or valid admin actions)
+let memoryArticlesCache: NewsItem[] = [];
 
 // =====================================================================
 // D1 SQL & NORMALIZATION UTILITIES
