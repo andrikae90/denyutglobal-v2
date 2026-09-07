@@ -561,10 +561,10 @@ export default {
     // 4. PUBLIC ARTICLES (GET /api/articles)
     if (pathname === '/api/articles' && method === 'GET') {
       if (env.DB) {
-        const sql = `SELECT * FROM articles WHERE status = 'published' ORDER BY published_at DESC, created_at DESC;`;
+        const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY published_at DESC, created_at DESC;`;
         const res = await executeWorkerD1Query(env.DB, sql);
-        if (res.success && res.results.length > 0) {
-          const articles = res.results.map(rowToNewsItem);
+        if (res.success) {
+          const articles = (res.results || []).map(rowToNewsItem);
           return jsonResponse({
             success: true,
             source: 'd1_binding',
@@ -574,11 +574,15 @@ export default {
         }
       }
 
+      // Fallback runtime hanya jika env.DB tidak tersedia atau query database error total
+      const fallbackPublished = memoryArticlesCache.filter(
+        (a) => a.status === 'published' && Boolean(a.reviewed)
+      );
       return jsonResponse({
         success: true,
-        source: 'server_store',
-        count: memoryArticlesCache.length,
-        data: memoryArticlesCache
+        source: 'server_fallback',
+        count: fallbackPublished.length,
+        data: fallbackPublished
       });
     }
 
@@ -734,22 +738,32 @@ export default {
     if (pathname.startsWith('/api/articles/') && method === 'GET') {
       const slug = decodeURIComponent(pathname.replace('/api/articles/', '').trim());
       if (env.DB) {
-        const sql = `SELECT * FROM articles WHERE slug = ? OR id = ? LIMIT 1;`;
+        const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
         const res = await executeWorkerD1Query(env.DB, sql, [slug, slug]);
-        if (res.success && res.results.length > 0) {
+        if (res.success) {
+          if (res.results.length > 0) {
+            return jsonResponse({
+              success: true,
+              source: 'd1_binding',
+              data: rowToNewsItem(res.results[0])
+            });
+          }
+          // D1 query sukses namun artikel tidak ditemukan atau belum dipublikasikan
           return jsonResponse({
-            success: true,
-            source: 'd1_binding',
-            data: rowToNewsItem(res.results[0])
-          });
+            success: false,
+            error: `Artikel dengan slug atau ID "${slug}" tidak ditemukan.`
+          }, 404);
         }
       }
 
-      const found = memoryArticlesCache.find(a => a.slug === slug || a.id === slug);
+      // Fallback runtime HANYA jika binding D1 tidak tersedia atau database error
+      const found = memoryArticlesCache.find(
+        (a) => (a.slug === slug || a.id === slug) && a.status === 'published' && Boolean(a.reviewed)
+      );
       if (found) {
         return jsonResponse({
           success: true,
-          source: 'server_store',
+          source: 'server_fallback',
           data: found
         });
       }
@@ -2252,15 +2266,19 @@ Kembalikan HANYA format JSON valid:
         }
 
         let article: any = null;
+        let d1Checked = false;
 
         if (env.DB) {
           try {
             const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
             const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, cleanSlug]);
-            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-              const candidate = rowToNewsItem(res.results[0]);
-              if (isPublicArticle(candidate)) {
-                article = candidate;
+            if (res.success) {
+              d1Checked = true;
+              if (Array.isArray(res.results) && res.results.length > 0) {
+                const candidate = rowToNewsItem(res.results[0]);
+                if (isPublicArticle(candidate)) {
+                  article = candidate;
+                }
               }
             }
           } catch (d1Err) {
@@ -2268,7 +2286,7 @@ Kembalikan HANYA format JSON valid:
           }
         }
 
-        if (!article && memoryArticlesCache && memoryArticlesCache.length > 0) {
+        if (!d1Checked && !article && memoryArticlesCache && memoryArticlesCache.length > 0) {
           const candidate = memoryArticlesCache.find(
             (a) =>
               ((a.slug && a.slug.toLowerCase() === cleanSlug) || a.id === cleanSlug) &&

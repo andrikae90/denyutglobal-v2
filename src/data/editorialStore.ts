@@ -454,32 +454,41 @@ export class EditorialStore {
   }
 
   /**
-   * Mengambil artikel publik dari API server D1 secara asinkron
-   * Memperbarui cache memori dan localStorage secara otomatis.
+   * Mengambil artikel publik dari API server D1 secara asinkron.
+   * D1/API adalah source of truth untuk konten publik.
+   * Memperbarui cache memori dan localStorage tanpa menjadikan localStorage source of truth.
    */
   public async fetchPublishedArticlesFromApi(): Promise<NewsItem[]> {
     try {
       const res = await fetch('/api/articles');
       if (res.ok) {
         const json = await res.json();
-        const apiArticles: NewsItem[] = json.data || (Array.isArray(json) ? json : []);
-        if (apiArticles.length > 0) {
-          // Merge API articles with current local drafts
-          const nonPublished = this.articles.filter(a => a.status !== 'published' || !a.reviewed);
-          this.articles = [...apiArticles, ...nonPublished];
-          this.saveToStorage();
-          this.isInitializedFromApi = true;
-          return this.getPublishedArticles();
-        }
+        const apiArticles: NewsItem[] = Array.isArray(json.data)
+          ? json.data
+          : (Array.isArray(json) ? json : []);
+
+        // Filter ketat: HANYA artikel berstatus published dan reviewed = true dari API
+        const verifiedPublic = apiArticles.filter(
+          (a) => a.status === 'published' && Boolean(a.reviewed)
+        );
+
+        // Pertahankan draft/review lokal untuk kebutuhan Ruang Redaksi, gantikan artikel publik dengan data D1
+        const nonPublished = this.articles.filter((a) => a.status !== 'published' || !a.reviewed);
+        this.articles = [...verifiedPublic, ...nonPublished];
+        this.saveToStorage();
+        this.isInitializedFromApi = true;
+        return verifiedPublic;
       }
     } catch (e) {
-      console.warn('Could not fetch public articles from API, using cached fallback:', e);
+      console.warn('Could not fetch public articles from API:', e);
     }
-    return this.getPublishedArticles();
+    // Jika API gagal: JANGAN fallback ke INITIAL_EDITORIAL_ARTICLES untuk public content
+    return this.isInitializedFromApi ? this.getPublishedArticles() : [];
   }
 
   /**
-   * Mengambil detail artikel tunggal dari API berdasarkan slug
+   * Mengambil detail artikel tunggal dari API berdasarkan slug.
+   * Jika tidak ditemukan di API D1, kembalikan undefined (jangan fallback ke artikel seed).
    */
   public async fetchArticleBySlugFromApi(slug: string): Promise<NewsItem | undefined> {
     try {
@@ -500,9 +509,10 @@ export class EditorialStore {
         }
       }
     } catch (e) {
-      console.warn('Could not fetch article by slug from API, looking in local cache:', e);
+      console.warn('Could not fetch article by slug from API:', e);
     }
-    return this.articles.find(a => a.slug === slug || a.id === slug);
+    // JANGAN mencari artikel publik yang hilang dengan INITIAL_EDITORIAL_ARTICLES sebagai fallback
+    return undefined;
   }
 
   /**

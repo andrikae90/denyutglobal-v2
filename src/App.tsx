@@ -162,7 +162,7 @@ export default function App() {
     }
   }, []);
 
-  // Fetch articles from API on mount and sync
+  // Fetch articles from API on mount and sync (D1/API as absolute source of truth for public state)
   const loadArticlesFromApi = useCallback(async () => {
     try {
       if (isEditorialAuthenticated) {
@@ -170,8 +170,30 @@ export default function App() {
         setAllEditorialArticles(fullEditorial);
       } else {
         const publishedFromApi = await editorialStore.fetchPublishedArticlesFromApi();
-        const currentAll = editorialStore.getAllArticles();
-        setAllEditorialArticles(currentAll);
+        const publicArticles = publishedFromApi.filter(isPublicArticle);
+        setAllEditorialArticles(publicArticles);
+
+        // Defense-in-depth: Re-evaluate selectedArticle against freshly fetched verified public articles
+        setSelectedArticle((prevSelected) => {
+          if (!prevSelected) return null;
+          const matched = findPublishedArticleBySlugOrId(publicArticles, prevSelected.slug || prevSelected.id);
+          if (matched) return matched;
+          // If initial selected article is not in verified public D1 articles, trigger 404
+          const prevSlug = getArticleSlug(prevSelected);
+          setNotFoundSlug(prevSlug);
+          return null;
+        });
+
+        // Re-evaluate notFoundSlug in case the article exists in freshly fetched publicArticles
+        setNotFoundSlug((prevNotFound) => {
+          if (!prevNotFound) return null;
+          const matched = findPublishedArticleBySlugOrId(publicArticles, prevNotFound);
+          if (matched) {
+            setSelectedArticle(matched);
+            return null;
+          }
+          return prevNotFound;
+        });
       }
     } catch (e) {
       console.warn('Error loading articles from API on mount:', e);
@@ -190,8 +212,12 @@ export default function App() {
         if (fetched && isPublicArticle(fetched)) {
           setSelectedArticle(fetched);
           setNotFoundSlug(null);
-          const currentAll = editorialStore.getAllArticles();
-          setAllEditorialArticles(currentAll);
+          setAllEditorialArticles((prev) => {
+            if (prev.some((a) => a.id === fetched.id || a.slug === fetched.slug)) {
+              return prev.map((a) => (a.id === fetched.id || a.slug === fetched.slug ? fetched : a));
+            }
+            return [fetched, ...prev];
+          });
         }
       }).catch((e) => {
         console.warn('Async article slug fetch error:', e);

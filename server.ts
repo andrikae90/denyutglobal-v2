@@ -1403,7 +1403,7 @@ async function startServer() {
 
       const d1Result = await executeD1Query(sql, params, req);
 
-      if (d1Result.success && d1Result.results.length > 0) {
+      if (d1Result.success) {
         const articles = d1Result.results.map(rowToNewsItem);
         return res.json({
           success: true,
@@ -1413,7 +1413,7 @@ async function startServer() {
         });
       }
 
-      // Fallback: In-Memory / File Persisted Store
+      // Fallback runtime HANYA jika D1 tidak terkonfigurasi atau query gagal total
       let published = serverArticles.filter(
         (a) => a.status === 'published' && a.reviewed === true
       );
@@ -1554,15 +1554,22 @@ async function startServer() {
       const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
       const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
 
-      if (d1Result.success && d1Result.results.length > 0) {
-        return res.json({
-          success: true,
-          source: d1Result.source,
-          data: rowToNewsItem(d1Result.results[0])
+      if (d1Result.success) {
+        if (d1Result.results.length > 0) {
+          return res.json({
+            success: true,
+            source: d1Result.source,
+            data: rowToNewsItem(d1Result.results[0])
+          });
+        }
+        // D1 query sukses tapi artikel tidak ditemukan di database publik
+        return res.status(404).json({
+          success: false,
+          error: `Artikel dengan slug atau ID "${slug}" tidak ditemukan.`
         });
       }
 
-      // Filter ketat: HANYA published dan reviewed dari server cache
+      // Fallback runtime HANYA jika D1 tidak terkonfigurasi atau query gagal total
       const published = serverArticles.filter(
         (a) => a.status === 'published' && a.reviewed === true
       );
