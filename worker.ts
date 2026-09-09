@@ -2211,7 +2211,7 @@ Kembalikan HANYA format JSON valid:
       if (method === 'GET') {
         if (env.DB) {
           try {
-            const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+            const sql = `SELECT id, slug, title, summary, content_json, status, reviewed, updated_at, published_at, created_at, is_hero, is_breaking FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY COALESCE(updated_at, published_at, created_at) DESC, created_at DESC;`;
             const res = await executeWorkerD1Query(env.DB, sql);
             if (res.success && Array.isArray(res.results) && res.results.length > 0) {
               articles = res.results.map(rowToNewsItem).filter(isPublicArticle);
@@ -2230,8 +2230,8 @@ Kembalikan HANYA format JSON valid:
       return new Response(xml, {
         status: 200,
         headers: {
-          'Content-Type': 'application/xml; charset=utf-8',
-          'Cache-Control': 'public, max-age=1800, s-maxage=1800',
+          'Content-Type': 'application/xml; charset=UTF-8',
+          'Cache-Control': 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600',
           'X-Robots-Tag': 'index, follow',
           'Access-Control-Allow-Origin': '*'
         }

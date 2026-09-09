@@ -726,7 +726,7 @@ async function startServer() {
   app.get('/sitemap.xml', async (req, res) => {
     try {
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      const sql = `SELECT * FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY created_at DESC;`;
+      const sql = `SELECT id, slug, title, summary, content_json, status, reviewed, updated_at, published_at, created_at, is_hero, is_breaking FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY COALESCE(updated_at, published_at, created_at) DESC, created_at DESC;`;
       const d1Result = await executeD1Query(sql, [], req);
       let articles: any[] = [];
 
@@ -738,13 +738,14 @@ async function startServer() {
       }
 
       const xml = generateSitemapXml(articles, domain);
-      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+      res.setHeader('Content-Type', 'application/xml; charset=UTF-8');
+      res.setHeader('Cache-Control', 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600');
+      res.setHeader('X-Robots-Tag', 'index, follow');
       return res.status(200).send(xml);
     } catch (e) {
       console.warn('Error generating sitemap.xml:', e);
       const fallbackXml = generateSitemapXml([], 'https://denyutglobal.my.id');
-      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Content-Type', 'application/xml; charset=UTF-8');
       return res.status(200).send(fallbackXml);
     }
   });
