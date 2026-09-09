@@ -518,6 +518,47 @@ export default {
       });
     }
 
+    // 2.1 SITEMAP REDIRECTS (/sitemap, /sitemap_index.xml -> /sitemap.xml)
+    if ((pathname === '/sitemap' || pathname === '/sitemap/' || pathname === '/sitemap_index.xml' || pathname === '/sitemap_index.xml/') && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      return Response.redirect(`${appUrl}/sitemap.xml`, 301);
+    }
+
+    // 2.2 SITEMAP.XML (Top Priority - Dinamis dari Cloudflare D1 + Validasi isPublicArticle)
+    if ((pathname === '/sitemap.xml' || pathname === '/sitemap.xml/') && (method === 'GET' || method === 'HEAD')) {
+      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
+      let articles: any[] = [];
+
+      if (method === 'GET') {
+        if (env.DB) {
+          try {
+            const sql = `SELECT id, slug, title, summary, content_json, status, reviewed, updated_at, published_at, created_at, is_hero, is_breaking FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY COALESCE(updated_at, published_at, created_at) DESC, created_at DESC;`;
+            const res = await executeWorkerD1Query(env.DB, sql);
+            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
+              articles = res.results.map(rowToNewsItem).filter(isPublicArticle);
+            }
+          } catch (d1Err) {
+            console.warn('[Worker Sitemap] D1 query error, falling back to static pages only:', d1Err);
+            articles = [];
+          }
+        }
+
+        // Jika D1 kosong atau query gagal: JANGAN pernah gunakan SAMPLE_NEWS_ITEMS atau INITIAL_EDITORIAL_ARTICLES
+        // articles tetap [] sehingga sitemap hanya memuat URL statis utama yang valid
+      }
+
+      const xml = method === 'GET' ? generateSitemapXml(articles, appUrl) : null;
+      return new Response(xml, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/xml; charset=UTF-8',
+          'Cache-Control': 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600',
+          'X-Robots-Tag': 'index, follow',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
     // 3. D1 STATUS ENDPOINT
     if (pathname === '/api/d1/status' && method === 'GET') {
       if (!env.DB) {
@@ -2194,47 +2235,6 @@ Kembalikan HANYA format JSON valid:
       return new Response(method === 'HEAD' ? null : robots, {
         status: 200,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-      });
-    }
-
-    // 17.5 SITEMAP REDIRECTS (/sitemap, /sitemap_index.xml -> /sitemap.xml)
-    if ((pathname === '/sitemap' || pathname === '/sitemap_index.xml') && (method === 'GET' || method === 'HEAD')) {
-      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      return Response.redirect(`${appUrl}/sitemap.xml`, 301);
-    }
-
-    // 18. SITEMAP.XML (Dinamis dari Cloudflare D1 + Validasi isPublicArticle)
-    if (pathname === '/sitemap.xml' && (method === 'GET' || method === 'HEAD')) {
-      const appUrl = (env.APP_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
-      let articles: any[] = [];
-
-      if (method === 'GET') {
-        if (env.DB) {
-          try {
-            const sql = `SELECT id, slug, title, summary, content_json, status, reviewed, updated_at, published_at, created_at, is_hero, is_breaking FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY COALESCE(updated_at, published_at, created_at) DESC, created_at DESC;`;
-            const res = await executeWorkerD1Query(env.DB, sql);
-            if (res.success && Array.isArray(res.results) && res.results.length > 0) {
-              articles = res.results.map(rowToNewsItem).filter(isPublicArticle);
-            }
-          } catch (d1Err) {
-            console.warn('[Worker Sitemap] D1 query error, falling back to static pages only:', d1Err);
-            articles = [];
-          }
-        }
-
-        // Jika D1 kosong atau query gagal: JANGAN pernah gunakan SAMPLE_NEWS_ITEMS atau INITIAL_EDITORIAL_ARTICLES
-        // articles tetap [] sehingga sitemap hanya memuat URL statis utama yang valid
-      }
-
-      const xml = method === 'GET' ? generateSitemapXml(articles, appUrl) : null;
-      return new Response(xml, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/xml; charset=UTF-8',
-          'Cache-Control': 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600',
-          'X-Robots-Tag': 'index, follow',
-          'Access-Control-Allow-Origin': '*'
-        }
       });
     }
 

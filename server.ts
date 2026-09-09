@@ -723,7 +723,7 @@ async function startServer() {
   });
 
   // Sitemap.xml (Dinamis dari Cloudflare D1 / Server Persistence + isPublicArticle)
-  app.get('/sitemap.xml', async (req, res) => {
+  app.get(['/sitemap.xml', '/sitemap.xml/'], async (req, res) => {
     try {
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
       const sql = `SELECT id, slug, title, summary, content_json, status, reviewed, updated_at, published_at, created_at, is_hero, is_breaking FROM articles WHERE status = 'published' AND reviewed = 1 ORDER BY COALESCE(updated_at, published_at, created_at) DESC, created_at DESC;`;
