@@ -1,6 +1,7 @@
 import { NewsItem } from '../types';
 import { slugify } from './slug';
-import { isPublicArticle } from './articleGuard';
+import { isPublicArticle, isTestingSlugOrTitle } from './articleGuard';
+import { getArticleRedirectDestination } from './redirects';
 
 const SITEMAP_BASE_DOMAIN = 'https://denyutglobal.my.id';
 
@@ -159,6 +160,11 @@ export function generateSitemapXml(
     }
     const cleanSlug = slugify(String(rawSlug));
     if (!cleanSlug) continue;
+
+    // Defense-in-depth: Never include redirect sources or testing slugs in sitemap
+    if (getArticleRedirectDestination(cleanSlug) || isTestingSlugOrTitle(cleanSlug)) {
+      continue;
+    }
 
     const loc = `${cleanDomain}/berita/${cleanSlug}`;
     if (seenUrls.has(loc)) continue;

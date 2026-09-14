@@ -4,7 +4,7 @@ import { NewsItem } from './src/types';
 import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml, injectLegalOpenGraphHtml } from './src/utils/openGraph';
-import { isPublicArticle } from './src/utils/articleGuard';
+import { isPublicArticle, isTestingSlugOrTitle } from './src/utils/articleGuard';
 import { getArticleRedirectDestination } from './src/utils/redirects';
 import { getLegalDocumentByPath, getLegalRedirectDestination, isLegalPath } from './src/data/legalContent';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
@@ -439,6 +439,7 @@ function jsonResponse(data: any, status = 200, headers: Record<string, string> =
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
+      'X-Robots-Tag': 'noindex, nofollow',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Editorial-Token',
@@ -508,6 +509,35 @@ export default {
       });
     }
 
+    // 1.1 TESTING PAGES HYGIENE (Return HTTP 404 with noindex for any testing or dummy URLs)
+    const decodedPathname = decodeURIComponent(pathname);
+    if (isTestingSlugOrTitle(pathname) || isTestingSlugOrTitle(decodedPathname)) {
+      const html404 = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>Halaman Tidak Ditemukan — 404</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+    <h1 style="margin:0 0 12px 0;color:#f43f5e;font-size:24px;font-weight:700;">404 — Halaman Tidak Ditemukan</h1>
+    <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 20px 0;">Halaman atau artikel yang Anda cari tidak tersedia atau telah dihapus dari sistem.</p>
+    <a href="/" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+  </div>
+</body>
+</html>`;
+      return new Response(method === 'HEAD' ? null : html404, {
+        status: 404,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Robots-Tag': 'noindex, nofollow',
+          'Cache-Control': 'no-store, no-cache, must-revalidate'
+        }
+      });
+    }
+
     // 2. HEALTH ENDPOINT
     if (pathname === '/api/health' && method === 'GET') {
       return jsonResponse({
@@ -552,7 +582,7 @@ export default {
         status: 200,
         headers: {
           'Content-Type': 'application/xml; charset=UTF-8',
-          'Cache-Control': 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600',
+          'Cache-Control': 'public, max-age=60, s-maxage=120, stale-while-revalidate=300',
           'X-Robots-Tag': 'index, follow',
           'Access-Control-Allow-Origin': '*'
         }
@@ -636,7 +666,7 @@ export default {
       if (!slug) {
         return new Response('Slug artikel wajib disertakan.', {
           status: 400,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Robots-Tag': 'noindex' }
         });
       }
 
@@ -657,7 +687,8 @@ export default {
                 status: 404,
                 headers: {
                   'Content-Type': 'text/plain; charset=utf-8',
-                  'Cache-Control': 'public, max-age=300'
+                  'Cache-Control': 'public, max-age=300',
+                  'X-Robots-Tag': 'noindex'
                 }
               });
             }
@@ -666,7 +697,8 @@ export default {
               status: 503,
               headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
-                'Cache-Control': 'no-cache'
+                'Cache-Control': 'no-cache',
+                'X-Robots-Tag': 'noindex'
               }
             });
           }
@@ -676,7 +708,8 @@ export default {
             status: 503,
             headers: {
               'Content-Type': 'text/plain; charset=utf-8',
-              'Cache-Control': 'no-cache'
+              'Cache-Control': 'no-cache',
+              'X-Robots-Tag': 'noindex'
             }
           });
         }
@@ -686,7 +719,8 @@ export default {
           status: 503,
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Cache-Control': 'no-cache'
+            'Cache-Control': 'no-cache',
+            'X-Robots-Tag': 'noindex'
           }
         });
       }
@@ -697,7 +731,8 @@ export default {
           status: 404,
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Cache-Control': 'public, max-age=300'
+            'Cache-Control': 'public, max-age=300',
+            'X-Robots-Tag': 'noindex'
           }
         });
       }
@@ -720,7 +755,8 @@ export default {
               headers: {
                 'Content-Type': mimeType,
                 'Cache-Control': 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
-                'X-Content-Type-Options': 'nosniff'
+                'X-Content-Type-Options': 'nosniff',
+                'X-Robots-Tag': 'noindex'
               }
             });
           } catch (decodeErr) {
@@ -753,6 +789,7 @@ export default {
               }
               resHeaders.set('Cache-Control', 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400');
               resHeaders.set('X-Content-Type-Options', 'nosniff');
+              resHeaders.set('X-Robots-Tag', 'noindex');
               return new Response(method === 'HEAD' ? null : assetRes.body, {
                 status: 200,
                 headers: resHeaders
@@ -785,7 +822,8 @@ export default {
         headers: {
           'Content-Type': 'image/svg+xml; charset=utf-8',
           'Cache-Control': 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400',
-          'X-Content-Type-Options': 'nosniff'
+          'X-Content-Type-Options': 'nosniff',
+          'X-Robots-Tag': 'noindex'
         }
       });
     }
@@ -828,7 +866,16 @@ export default {
     }
 
     // 5.5 SUBSCRIBE NEWSLETTER (POST /api/subscribe)
-    if (pathname === '/api/subscribe' && method === 'POST') {
+    if (pathname === '/api/subscribe') {
+      if (method !== 'POST') {
+        return jsonResponse({
+          success: false,
+          error: 'Metode HTTP tidak didukung. Gunakan POST untuk mendaftar newsletter.'
+        }, 405, {
+          'Allow': 'POST',
+          'X-Robots-Tag': 'noindex, nofollow'
+        });
+      }
       try {
         const body: any = await request.json().catch(() => ({}));
         const rawEmail = typeof body?.email === 'string' ? body.email : '';
@@ -1019,6 +1066,7 @@ export default {
                 <meta charset="utf-8">
                 <title>Tautan Tidak Valid - DenyutGlobal</title>
                 <meta name="viewport" content="width=device-width,initial-scale=1">
+                <meta name="robots" content="noindex, nofollow">
               </head>
               <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
                 <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
@@ -1030,7 +1078,14 @@ export default {
                 </div>
               </body>
               </html>
-            `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+            `, {
+              status: 400,
+              headers: {
+                'Content-Type': 'text/html; charset=utf-8',
+                'X-Robots-Tag': 'noindex, nofollow',
+                'Cache-Control': 'no-store, no-cache'
+              }
+            });
           }
           return jsonResponse({ success: false, error: 'Token berhenti berlangganan diperlukan dan harus valid.' }, 400);
         }
@@ -1062,6 +1117,7 @@ export default {
                 <meta charset="utf-8">
                 <title>Token Tidak Sesuai - DenyutGlobal</title>
                 <meta name="viewport" content="width=device-width,initial-scale=1">
+                <meta name="robots" content="noindex, nofollow">
               </head>
               <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
                 <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
@@ -1072,7 +1128,14 @@ export default {
                 </div>
               </body>
               </html>
-            `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+            `, {
+              status: 400,
+              headers: {
+                'Content-Type': 'text/html; charset=utf-8',
+                'X-Robots-Tag': 'noindex, nofollow',
+                'Cache-Control': 'no-store, no-cache'
+              }
+            });
           }
           return jsonResponse({ success: false, error: 'Data subscriber tidak ditemukan atau token tidak cocok.' }, 400);
         }
@@ -1096,6 +1159,7 @@ export default {
               <meta charset="utf-8">
               <title>Berhasil Berhenti Berlangganan - DenyutGlobal</title>
               <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta name="robots" content="noindex, nofollow">
             </head>
             <body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
               <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:480px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
@@ -1111,7 +1175,14 @@ export default {
               </div>
             </body>
             </html>
-          `, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+          `, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'X-Robots-Tag': 'noindex, nofollow',
+              'Cache-Control': 'no-store, no-cache'
+            }
+          });
         }
 
         return jsonResponse({
@@ -1135,7 +1206,12 @@ export default {
           return new Response(`
             <!DOCTYPE html>
             <html lang="id">
-            <head><meta charset="utf-8"><title>Verifikasi Gagal - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+            <head>
+              <meta charset="utf-8">
+              <title>Verifikasi Gagal - DenyutGlobal</title>
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta name="robots" content="noindex, nofollow">
+            </head>
             <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
               <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
                 <h2 style="margin:0 0 12px 0;color:#f43f5e;">Token Verifikasi Tidak Ditemukan</h2>
@@ -1144,7 +1220,14 @@ export default {
               </div>
             </body>
             </html>
-          `, { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+          `, {
+            status: 400,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'X-Robots-Tag': 'noindex, nofollow',
+              'Cache-Control': 'no-store, no-cache'
+            }
+          });
         }
 
         const nowIso = new Date().toISOString();
@@ -1159,7 +1242,12 @@ export default {
         return new Response(`
           <!DOCTYPE html>
           <html lang="id">
-          <head><meta charset="utf-8"><title>Langganan Terverifikasi - DenyutGlobal</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+          <head>
+            <meta charset="utf-8">
+            <title>Langganan Terverifikasi - DenyutGlobal</title>
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <meta name="robots" content="noindex, nofollow">
+          </head>
           <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
             <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:440px;text-align:center;">
               <div style="font-size:40px;margin-bottom:8px;">✓</div>
@@ -1169,7 +1257,14 @@ export default {
             </div>
           </body>
           </html>
-        `, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        `, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'X-Robots-Tag': 'noindex, nofollow',
+            'Cache-Control': 'no-store, no-cache'
+          }
+        });
       } catch (err: any) {
         console.error('Worker verify subscription error:', err);
         return jsonResponse({ success: false, error: 'Gagal memproses verifikasi.' }, 500);
@@ -2260,10 +2355,20 @@ Kembalikan HANYA format JSON valid:
       const rawSlug = pathname.replace(/^\/berita\/?/, '').replace(/\/+$/, '').trim();
 
       if (rawSlug) {
-        const cleanSlug = decodeURIComponent(rawSlug).trim().toLowerCase();
+        let cleanSlug = rawSlug.trim().toLowerCase();
+        try {
+          cleanSlug = decodeURIComponent(rawSlug).trim().toLowerCase();
+        } catch {}
 
         // 301 Permanent Redirect for legacy or de-duplicated slugs (non-looping)
-        const redirectDest = getArticleRedirectDestination(cleanSlug);
+        let redirectDest = getArticleRedirectDestination(cleanSlug);
+        if (!redirectDest) {
+          const slugCandidate = slugify(cleanSlug);
+          if (slugCandidate && slugCandidate !== cleanSlug) {
+            redirectDest = getArticleRedirectDestination(slugCandidate);
+          }
+        }
+
         if (redirectDest) {
           const redirectUrl = `${appUrl}${redirectDest}`;
           return new Response(null, {
@@ -2281,11 +2386,25 @@ Kembalikan HANYA format JSON valid:
 
         if (env.DB) {
           try {
-            const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
-            const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, cleanSlug]);
+            const slugCandidate = slugify(cleanSlug);
+            const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1;`;
+            const res = await executeWorkerD1Query(env.DB, sql, [cleanSlug, slugCandidate, cleanSlug]);
             if (res.success && Array.isArray(res.results) && res.results.length > 0) {
               const candidate = rowToNewsItem(res.results[0]);
               if (isPublicArticle(candidate)) {
+                // Canonicalize if unslugified spaces/punctuation or case mismatch
+                const canonicalSlug = candidate.slug || slugCandidate;
+                if (cleanSlug !== canonicalSlug.toLowerCase()) {
+                  return new Response(null, {
+                    status: 301,
+                    headers: {
+                      'Location': `${appUrl}/berita/${canonicalSlug}`,
+                      'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+                      'X-Robots-Tag': 'noindex, follow',
+                      'Access-Control-Allow-Origin': '*'
+                    }
+                  });
+                }
                 article = candidate;
               }
             }
@@ -2313,6 +2432,32 @@ Kembalikan HANYA format JSON valid:
             console.warn('Failed to rewrite article HTML metadata:', assetErr);
           }
         }
+
+        // If article was not found or is not public, return 404 with noindex HTML
+        const notFoundHtml = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>Artikel Tidak Ditemukan — DenyutGlobal</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+    <h1 style="margin:0 0 12px 0;color:#f43f5e;font-size:22px;font-weight:700;">Artikel Tidak Ditemukan</h1>
+    <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 20px 0;">Artikel yang Anda cari tidak tersedia, belum dipublikasikan, atau telah dipindahkan.</p>
+    <a href="/" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+  </div>
+</body>
+</html>`;
+        return new Response(method === 'HEAD' ? null : notFoundHtml, {
+          status: 404,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'X-Robots-Tag': 'noindex, nofollow',
+            'Cache-Control': 'no-store, no-cache, must-revalidate'
+          }
+        });
       }
     }
 
@@ -2353,6 +2498,16 @@ Kembalikan HANYA format JSON valid:
           console.warn('Failed to rewrite legal HTML metadata:', assetErr);
         }
       }
+    }
+
+    // 18.9 BLOCK UNMATCHED /api/* FROM SPA FALLBACK (Always return JSON 404 with noindex)
+    if (pathname.startsWith('/api/')) {
+      return jsonResponse({
+        success: false,
+        error: 'Endpoint API tidak ditemukan.'
+      }, 404, {
+        'X-Robots-Tag': 'noindex, nofollow'
+      });
     }
 
     // 19. STATIC ASSETS & SPA ROUTING (Cloudflare Assets Binding)

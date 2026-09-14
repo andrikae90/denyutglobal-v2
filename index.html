@@ -18,7 +18,9 @@
           window.location.search.indexOf('redaksi') !== -1 ||
           window.location.search.indexOf('editorial') !== -1 ||
           (window.sessionStorage && window.sessionStorage.getItem('denyutglobal_editorial_session') === 'active');
-        if (isEditorial) {
+        var isApiOrTesting = /^\/api(\/|$)/i.test(window.location.pathname) ||
+          /(uji[\s_-]?coba|testing|sample|dummy|lorem)/i.test(window.location.pathname);
+        if (isEditorial || isApiOrTesting) {
           window['ga-disable-G-XX1CWQ3HBG'] = true;
         }
       } catch (e) {}

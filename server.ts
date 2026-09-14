@@ -11,7 +11,7 @@ import { NewsItem } from './src/types';
 import { slugify, resolveDeterministicSlug } from './src/utils/slug';
 import { generateSitemapXml } from './src/utils/sitemap';
 import { injectOpenGraphHtml, injectLegalOpenGraphHtml } from './src/utils/openGraph';
-import { isPublicArticle } from './src/utils/articleGuard';
+import { isPublicArticle, isTestingSlugOrTitle } from './src/utils/articleGuard';
 import { getArticleRedirectDestination } from './src/utils/redirects';
 import { getLegalDocumentByPath, getLegalRedirectDestination } from './src/data/legalContent';
 import { sendSingleResendEmail, sendBatchNewsletter, sendVerificationEmail } from './src/services/resendEmailService';
@@ -613,6 +613,45 @@ async function startServer() {
 
   app.use(express.json({ limit: '15mb' }));
 
+  // Global X-Robots-Tag: noindex, nofollow for all /api endpoints
+  app.use('/api', (req, res, next) => {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    next();
+  });
+
+  // Testing & dummy URLs hygiene (Return HTTP 404 with noindex)
+  app.use((req, res, next) => {
+    const rawPath = req.path || '';
+    let decoded = rawPath;
+    try {
+      decoded = decodeURIComponent(rawPath);
+    } catch {}
+
+    if (isTestingSlugOrTitle(rawPath) || isTestingSlugOrTitle(decoded)) {
+      res.status(404);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return res.send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>Halaman Tidak Ditemukan — 404</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+    <h1 style="margin:0 0 12px 0;color:#f43f5e;font-size:24px;font-weight:700;">404 — Halaman Tidak Ditemukan</h1>
+    <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 20px 0;">Halaman atau artikel yang Anda cari tidak tersedia atau telah dihapus dari sistem.</p>
+    <a href="/" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+  </div>
+</body>
+</html>`);
+    }
+    next();
+  });
+
   // Middleware Otorisasi Redaksi Server-Side
   const requireEditorialAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization || (req.headers['x-editorial-token'] as string);
@@ -739,7 +778,7 @@ async function startServer() {
 
       const xml = generateSitemapXml(articles, domain);
       res.setHeader('Content-Type', 'application/xml; charset=UTF-8');
-      res.setHeader('Cache-Control', 'public, max-age=600, s-maxage=1800, stale-while-revalidate=600');
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300');
       res.setHeader('X-Robots-Tag', 'index, follow');
       return res.status(200).send(xml);
     } catch (e) {
@@ -3654,10 +3693,20 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
   app.get(['/berita/:slug', '/berita/:slug/'], async (req, res, next) => {
     try {
       const { slug } = req.params;
-      const cleanSlug = decodeURIComponent(slug || '').trim().toLowerCase();
+      let cleanSlug = (slug || '').trim().toLowerCase();
+      try {
+        cleanSlug = decodeURIComponent(slug || '').trim().toLowerCase();
+      } catch {}
 
       // 301 Permanent Redirect for legacy or de-duplicated slugs (non-looping)
-      const redirectDest = getArticleRedirectDestination(cleanSlug);
+      let redirectDest = getArticleRedirectDestination(cleanSlug);
+      if (!redirectDest) {
+        const slugCandidate = slugify(cleanSlug);
+        if (slugCandidate && slugCandidate !== cleanSlug) {
+          redirectDest = getArticleRedirectDestination(slugCandidate);
+        }
+      }
+
       if (redirectDest) {
         res.setHeader('Cache-Control', 'public, max-age=86400');
         res.setHeader('X-Robots-Tag', 'noindex, follow');
@@ -3667,12 +3716,19 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
       const domain = (process.env.PUBLIC_CANONICAL_URL || 'https://denyutglobal.my.id').replace(/\/+$/, '');
 
       let article: any = null;
-      const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
-      const d1Result = await executeD1Query(sql, [cleanSlug, cleanSlug], req);
+      const slugCandidate = slugify(cleanSlug);
+      const sql = `SELECT * FROM articles WHERE (LOWER(slug) = LOWER(?) OR LOWER(slug) = LOWER(?) OR id = ?) AND status = 'published' AND reviewed = 1 LIMIT 1`;
+      const d1Result = await executeD1Query(sql, [cleanSlug, slugCandidate, cleanSlug], req);
 
       if (d1Result.success && d1Result.results.length > 0) {
         const candidate = rowToNewsItem(d1Result.results[0]);
         if (isPublicArticle(candidate)) {
+          const canonicalSlug = candidate.slug || slugCandidate;
+          if (cleanSlug !== canonicalSlug.toLowerCase()) {
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader('X-Robots-Tag', 'noindex, follow');
+            return res.redirect(301, `/berita/${canonicalSlug}`);
+          }
           article = candidate;
         }
       }
@@ -3690,7 +3746,28 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
           return res.send(modifiedHtml);
         }
       }
-      return next();
+
+      // If article not found or not public, return 404 with noindex
+      res.status(404);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return res.send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>Artikel Tidak Ditemukan — DenyutGlobal</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;max-width:460px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+    <h1 style="margin:0 0 12px 0;color:#f43f5e;font-size:22px;font-weight:700;">Artikel Tidak Ditemukan</h1>
+    <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 20px 0;">Artikel yang Anda cari tidak tersedia, belum dipublikasikan, atau telah dipindahkan.</p>
+    <a href="/" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">Kembali ke Beranda</a>
+  </div>
+</body>
+</html>`);
     } catch (e) {
       console.warn('Error rendering server-side article metadata in Express:', e);
       return next();
@@ -3728,6 +3805,15 @@ KEMBALIKAN HANYA FORMAT JSON VALID:
       console.warn('Error handling legal page SSR in Express:', err);
       return next();
     }
+  });
+
+  // Block unmatched /api/* from falling back to index.html (return JSON 404 with noindex)
+  app.all('/api/*', (req, res) => {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).json({
+      success: false,
+      error: 'Endpoint API tidak ditemukan.'
+    });
   });
 
   // Vite middleware for development vs static for production

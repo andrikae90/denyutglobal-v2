@@ -77,7 +77,7 @@ export function extractArticleText(article: any): string {
  * Uses exact phrases or word boundaries to prevent false positives on legitimate news
  * (e.g. "demonstrasi" or "protes").
  */
-const INTERNAL_TEST_PATTERNS = [
+export const INTERNAL_TEST_PATTERNS = [
   /\buji[\s_-]?coba\b/i,
   /\btesting\b/i,
   /\btest\s+article\b/i,
@@ -87,6 +87,20 @@ const INTERNAL_TEST_PATTERNS = [
   /\bdemo[\s_-]?article\b/i,
   /\blorem\s+ipsum\b/i
 ];
+
+/**
+ * Checks if a given slug, path, or title matches internal testing keywords.
+ */
+export function isTestingSlugOrTitle(input: string): boolean {
+  if (!input) return false;
+  const str = String(input);
+  for (const pattern of INTERNAL_TEST_PATTERNS) {
+    if (pattern.test(str)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Checks if an article passes all public quality and visibility criteria.

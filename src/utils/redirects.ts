@@ -14,6 +14,14 @@ export const ARTICLE_PERMANENT_REDIRECTS: Record<string, string> = {
   // Case 3: Duplicate Polri Karhutla (secondary coverage redirected to primary article)
   'polri-tetapkan-72-tersangka-karhutla-penanganan-menjangkau-sembilan-polda':
     '/berita/polri-tetapkan-72-tersangka-karhutla-sembilan-polda',
+
+  // Case 4: Abnormal Karhutla Kalimantan URL with unslugified spaces/punctuation
+  'karhutla kalimantan meluas, pemerintah kerahkan 12.880 personel dan perkuat operasi udara':
+    '/berita/karhutla-kalimantan-meluas-pemerintah-kerahkan-12880-personel-dan-perkuat-operasi-udara',
+  'karhutla kalimantan meluas pemerintah kerahkan 12880 personel dan perkuat operasi udara':
+    '/berita/karhutla-kalimantan-meluas-pemerintah-kerahkan-12880-personel-dan-perkuat-operasi-udara',
+  'karhutla-kalimantan-meluas,-pemerintah-kerahkan-12.880-personel-dan-perkuat-operasi-udara':
+    '/berita/karhutla-kalimantan-meluas-pemerintah-kerahkan-12880-personel-dan-perkuat-operasi-udara',
 };
 
 /**
@@ -22,8 +30,22 @@ export const ARTICLE_PERMANENT_REDIRECTS: Record<string, string> = {
  */
 export function getArticleRedirectDestination(rawSlug: string): string | null {
   if (!rawSlug) return null;
-  const clean = rawSlug.trim().toLowerCase();
-  const dest = ARTICLE_PERMANENT_REDIRECTS[clean];
+  let clean = rawSlug.trim().toLowerCase();
+  try {
+    clean = decodeURIComponent(clean).trim().toLowerCase();
+  } catch {
+    // Keep as is if decode fails
+  }
+
+  // 1. Direct match
+  let dest = ARTICLE_PERMANENT_REDIRECTS[clean];
+
+  // 2. Normalized spaces match
+  if (!dest) {
+    const collapsedSpaces = clean.replace(/[\s_]+/g, ' ');
+    dest = ARTICLE_PERMANENT_REDIRECTS[collapsedSpaces];
+  }
+
   if (!dest) return null;
 
   // Safety check: prevent redirect loops if dest matches the requested slug
