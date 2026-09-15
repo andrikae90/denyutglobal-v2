@@ -28,17 +28,12 @@ jobs:
           if 'RESEND_WEBHOOK_SIGNING_SECRET?: string;' in s:
               print('Patch 4 already present; nothing to do.')
               raise SystemExit(0)
-
           env_old = "  RESEND_API_KEY?: string;\n  NEWSLETTER_EMAIL_ENABLED?: string;"
           env_new = "  RESEND_API_KEY?: string;\n  RESEND_WEBHOOK_SIGNING_SECRET?: string;\n  NEWSLETTER_EMAIL_ENABLED?: string;"
-          if env_old not in s:
-              raise SystemExit('Env target not found')
+          if env_old not in s: raise SystemExit('Env target not found')
           s = s.replace(env_old, env_new, 1)
-
           marker = "// 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)"
-          if marker not in s:
-              raise SystemExit('Webhook marker not found')
-
+          if marker not in s: raise SystemExit('Webhook marker not found')
           helper = '''async function verifyResendWebhookSignature(request: Request, rawBody: string, env: Env): Promise<boolean> {
   const secret = (env.RESEND_WEBHOOK_SIGNING_SECRET || '').trim();
   if (!secret) return false;
@@ -50,7 +45,6 @@ jobs:
   if (!Number.isFinite(timestamp)) return false;
   const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
   if (ageSeconds > 300) return false;
-
   const secretValue = secret.startsWith('whsec_') ? secret.slice(6) : secret;
   let secretBytes: Uint8Array;
   try {
@@ -58,10 +52,7 @@ jobs:
     const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
     const binary = atob(padded);
     secretBytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  } catch {
-    return false;
-  }
-
+  } catch { return false; }
   try {
     const key = await crypto.subtle.importKey('raw', secretBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
     const signedPayload = `${svixId}.${svixTimestamp}.${rawBody}`;
@@ -76,15 +67,12 @@ jobs:
         if (await crypto.subtle.verify('HMAC', key, signatureBytes, new TextEncoder().encode(signedPayload))) return true;
       } catch {}
     }
-  } catch (err) {
-    console.error('Resend webhook signature verification error:', err);
-  }
+  } catch (err) { console.error('Resend webhook signature verification error:', err); }
   return false;
 }
 
 '''
           s = s.replace(marker, helper + marker, 1)
-
           old = '''    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
     if (pathname === '/api/webhooks/resend' && method === 'POST') {
       try {
@@ -107,30 +95,18 @@ jobs:
 '''
           new = '''    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
     if (pathname === '/api/webhooks/resend') {
-      if (method !== 'POST') {
-        return jsonResponse({ received: false, error: 'Method not allowed.' }, 405, { 'Allow': 'POST' });
-      }
+      if (method !== 'POST') return jsonResponse({ received: false, error: 'Method not allowed.' }, 405, { 'Allow': 'POST' });
       try {
         const rawBody = await request.text();
-        if (!await verifyResendWebhookSignature(request, rawBody, env)) {
-          return jsonResponse({ received: false, error: 'Invalid webhook signature.' }, 401, { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
-        }
+        if (!await verifyResendWebhookSignature(request, rawBody, env)) return jsonResponse({ received: false, error: 'Invalid webhook signature.' }, 401, { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
         let body: any;
-        try {
-          body = JSON.parse(rawBody);
-        } catch {
-          return jsonResponse({ received: false, error: 'Invalid JSON payload.' }, 400, { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
-        }
-        if (!env.DB) {
-          return jsonResponse({ received: false, error: 'Cloudflare D1 is unavailable.' }, 503, { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
-        }
+        try { body = JSON.parse(rawBody); } catch { return jsonResponse({ received: false, error: 'Invalid JSON payload.' }, 400); }
+        if (!env.DB) return jsonResponse({ received: false, error: 'Cloudflare D1 is unavailable.' }, 503);
         if (body?.type && body?.data?.email) {
           const targetEmail = typeof body.data.email === 'string' ? body.data.email.trim().toLowerCase() : '';
           if (targetEmail && (body.type === 'email.bounced' || body.type === 'email.complained')) {
             const updateRes = await executeWorkerD1Query(env.DB, `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = datetime('now') WHERE email = ?;`, [targetEmail]);
-            if (!updateRes.success) {
-              return jsonResponse({ received: false, error: 'Failed to update subscriber status.' }, 503);
-            }
+            if (!updateRes.success) return jsonResponse({ received: false, error: 'Failed to update subscriber status.' }, 503);
           }
         }
         return jsonResponse({ received: true });
@@ -140,8 +116,7 @@ jobs:
       }
     }
 '''
-          if old not in s:
-              raise SystemExit('Original webhook block not found')
+          if old not in s: raise SystemExit('Original webhook block not found')
           s = s.replace(old, new, 1)
           p.write_text(s)
           PY
@@ -161,8 +136,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Commit Patch 4 and remove temporary workflow
-        if: contains(github.event.head_commit.message, 'security: run Resend webhook hardening in trusted build workflow')
+      - name: Commit Patch 4 and restore normal workflow
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
@@ -171,5 +145,6 @@ jobs:
           git rm .github/workflows/security-step-4-patch.yml
           git checkout HEAD^ -- .github/workflows/denyutglobal-build.yml
           git add .github/workflows/denyutglobal-build.yml
-          git commit -m 'security: verify Resend webhook signatures before processing'
+          git diff --cached --quiet && echo 'No patch changes to commit' || git commit -m 'security: verify Resend webhook signatures before processing'
+          if git status --porcelain | grep -q .; then git commit -am 'security: restore normal build workflow'; fi
           git push
