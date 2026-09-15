@@ -33,7 +33,8 @@
   },
   "secrets": {
     "required": [
-      "CLOUDINARY_API_SECRET"
+      "CLOUDINARY_API_SECRET",
+      "EDITORIAL_PASSPHRASE_SHA256_HASH"
     ]
   }
 }
