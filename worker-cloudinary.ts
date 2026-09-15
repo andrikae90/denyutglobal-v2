@@ -4,32 +4,76 @@ import type { ExecutionContext } from '@cloudflare/workers-types';
 
 type WorkerEnv = Record<string, any>;
 
-function copyEditorialHeaders(request: Request): Headers {
-  const headers = new Headers();
-  const authorization = request.headers.get('authorization');
-  const editorialToken = request.headers.get('x-editorial-token');
-  const cookie = request.headers.get('cookie');
-  if (authorization) headers.set('authorization', authorization);
-  if (editorialToken) headers.set('x-editorial-token', editorialToken);
-  // The editorial session may be stored in an HttpOnly cookie. Preserve it
-  // when the wrapper performs its internal session verification request.
-  if (cookie) headers.set('cookie', cookie);
-  return headers;
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
-async function verifyEditorialSession(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response | null> {
-  const authHeaders = copyEditorialHeaders(request);
-  if (!authHeaders.has('authorization') && !authHeaders.has('x-editorial-token') && !authHeaders.has('cookie')) {
+async function verifyEditorialSession(request: Request, env: WorkerEnv): Promise<Response | null> {
+  const authorization = request.headers.get('authorization');
+  const editorialToken = request.headers.get('x-editorial-token');
+  const rawToken = authorization || editorialToken;
+
+  if (!rawToken) {
     return new Response(JSON.stringify({ success: false, error: 'Akses ditolak. Sesi redaksi tidak ditemukan.' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
     });
   }
-  const sessionUrl = new URL('/api/editorial/session', request.url);
-  const sessionRequest = new Request(sessionUrl.toString(), { method: 'GET', headers: authHeaders });
-  const response = await worker.fetch(sessionRequest, env as any, ctx as any);
-  if (response.ok) return null;
-  return response;
+
+  const token = rawToken.replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return new Response(JSON.stringify({ success: false, error: 'Akses ditolak. Sesi redaksi tidak ditemukan.' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+
+  // Keep the same authentication rules as worker.ts, but validate locally.
+  // This avoids an internal /api/editorial/session subrequest and guarantees
+  // that the exact token used for the write is the token being checked.
+  if (env.EDITORIAL_SECRET_KEY && token === String(env.EDITORIAL_SECRET_KEY).trim()) {
+    return null;
+  }
+
+  if (!token.startsWith('dg_')) {
+    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+
+  const parts = token.split('_');
+  if (parts.length !== 3) {
+    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+
+  const expHex = parts[1];
+  const signature = parts[2];
+  const expiresAt = parseInt(expHex, 16);
+  const targetHash = String(env.EDITORIAL_PASSPHRASE_SHA256_HASH || '').trim().toLowerCase();
+
+  if (!targetHash || !/^[0-9a-f]{64}$/.test(targetHash) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+
+  const expectedSignature = await sha256Hex(`${expHex}:${targetHash}`);
+  if (signature.toLowerCase() !== expectedSignature.toLowerCase()) {
+    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+
+  return null;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -113,7 +157,7 @@ export default {
       (pathname === '/api/editorial/sync-batch' && method === 'POST');
 
     if (isEditorialWrite) {
-      const authFailure = await verifyEditorialSession(request, env, ctx);
+      const authFailure = await verifyEditorialSession(request, env);
       if (authFailure) return authFailure;
 
       try {
