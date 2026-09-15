@@ -26,7 +26,8 @@ jobs:
 
           old_default = "const DEFAULT_EDITORIAL_HASH = '518f21a9a8470c890258ddaa2dc85c5483f597e22d7dc4b4a825208aa0eb1ea7';\n"
           if old_default not in text:
-              raise SystemExit('PATCH_ABORT: hardcoded editorial hash declaration not found')
+              print('PATCH_NOT_NEEDED: hardcoded editorial hash declaration already absent')
+              raise SystemExit(0)
           text = text.replace(old_default, '', 1)
 
           old_verify = "const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || DEFAULT_EDITORIAL_HASH).toLowerCase();\n        const expectedSig = await sha256Hex(`${expHex}:${targetHash}`);"
@@ -49,11 +50,11 @@ jobs:
 
       - name: Verify patch
         run: |
-          grep -n "EDITORIAL_PASSPHRASE_SHA256_HASH" worker.ts
           if grep -n "DEFAULT_EDITORIAL_HASH" worker.ts; then
             echo "FAIL: hardcoded editorial hash still exists"
             exit 1
           fi
+          grep -n "EDITORIAL_PASSPHRASE_SHA256_HASH" worker.ts
 
       - name: Commit patch
         shell: bash
@@ -66,6 +67,7 @@ jobs:
           fi
           git add worker.ts
           git commit -m "security: remove hardcoded editorial auth fallback"
+          git pull --rebase origin security/step-1-editorial-auth-fail-closed
           git push origin HEAD:security/step-1-editorial-auth-fail-closed
 
-# Trigger comment: the next push executes the idempotent patcher.
+# Idempotent patch workflow for security step 1.
