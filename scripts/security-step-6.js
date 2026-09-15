@@ -5,7 +5,7 @@ const workerPath = 'worker.ts';
 const packagePath = 'package.json';
 const workflowPath = '.github/workflows/denyutglobal-build.yml';
 
-const worker = fs.readFileSync(workerPath, 'utf8');
+let worker = fs.readFileSync(workerPath, 'utf8');
 
 if (!worker.includes('const editorialAuthRateLimit = new Map')) {
   const marker = 'let memoryArticlesCache: NewsItem[] = [];';
@@ -18,7 +18,7 @@ const authStart = "    if (pathname === '/api/editorial/auth' && method === 'POS
 const authGuard = `      pruneEditorialAuthRateLimit();\n      const authRate = checkEditorialAuthRateLimit(request);\n      if (!authRate.allowed) {\n        return jsonResponse({ success: false, error: 'Terlalu banyak percobaan autentikasi. Silakan coba lagi nanti.' }, 429, { 'Retry-After': String(authRate.retryAfter), 'Cache-Control': 'no-store' });\n      }\n`;
 if (!worker.includes(authGuard)) {
   if (!worker.includes(authStart)) throw new Error('Patch #6 marker not found: editorial auth route');
-  worker = worker.replace(`${authStart}\n      try {`, `${authStart}\n      ${authGuard}      try {`);
+  worker = worker.replace(`${authStart}\n      try {`, `${authStart}\n${authGuard}      try {`);
 }
 
 const successMarker = "          activeEditorialSessions.set(sessionToken, expiresAt);";
@@ -28,15 +28,11 @@ if (!worker.includes('clearEditorialAuthRateLimit(request);')) {
 }
 
 const statusRoute = "    if (pathname === '/api/subscription-status' || pathname === '/api/subscription/status') {";
-if (!worker.includes("Method not allowed.")) {
-  // no-op; method guards are patched below using the exact route marker
-}
 if (!worker.includes(`${statusRoute}\n      if (method !== 'GET' && method !== 'POST')`)) {
   if (!worker.includes(statusRoute)) throw new Error('Patch #6 marker not found: subscription status route');
   worker = worker.replace(statusRoute, `${statusRoute}\n      if (method !== 'GET' && method !== 'POST') {\n        return jsonResponse({ success: false, error: 'Method not allowed.' }, 405, { 'Allow': 'GET, POST' });\n      }`);
 }
 
-// Remove the remaining email-enumeration fields from the public subscription-status response.
 worker = worker.replace(/return jsonResponse\(\{\n\s*success: true,\n\s*exists: false,\n\s*status: 'none',\n\s*isSubscribed: false\n\s*\}\);/, "return jsonResponse({\n          success: true,\n          isSubscribed: false\n        });");
 
 const editorialGetRoute = "    if (pathname === '/api/editorial/articles' && method === 'GET') {";
