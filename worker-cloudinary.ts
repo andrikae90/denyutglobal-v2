@@ -4,78 +4,6 @@ import type { ExecutionContext } from '@cloudflare/workers-types';
 
 type WorkerEnv = Record<string, any>;
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-async function verifyEditorialSession(request: Request, env: WorkerEnv): Promise<Response | null> {
-  const authorization = request.headers.get('authorization');
-  const editorialToken = request.headers.get('x-editorial-token');
-  const rawToken = authorization || editorialToken;
-
-  if (!rawToken) {
-    return new Response(JSON.stringify({ success: false, error: 'Akses ditolak. Sesi redaksi tidak ditemukan.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  const token = rawToken.replace(/^Bearer\s+/i, '').trim();
-  if (!token) {
-    return new Response(JSON.stringify({ success: false, error: 'Akses ditolak. Sesi redaksi tidak ditemukan.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  // Keep the same authentication rules as worker.ts, but validate locally.
-  // This avoids an internal /api/editorial/session subrequest and guarantees
-  // that the exact token used for the write is the token being checked.
-  if (env.EDITORIAL_SECRET_KEY && token === String(env.EDITORIAL_SECRET_KEY).trim()) {
-    return null;
-  }
-
-  if (!token.startsWith('dg_')) {
-    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  const parts = token.split('_');
-  if (parts.length !== 3) {
-    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  const expHex = parts[1];
-  const signature = parts[2];
-  const expiresAt = parseInt(expHex, 16);
-  const targetHash = String(env.EDITORIAL_PASSPHRASE_SHA256_HASH || '').trim().toLowerCase();
-
-  if (!targetHash || !/^[0-9a-f]{64}$/.test(targetHash) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  const expectedSignature = await sha256Hex(`${expHex}:${targetHash}`);
-  if (signature.toLowerCase() !== expectedSignature.toLowerCase()) {
-    return new Response(JSON.stringify({ success: false, error: 'Sesi redaksi kedaluwarsa atau tidak valid.' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
-  }
-
-  return null;
-}
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -114,7 +42,7 @@ async function prepareNewEditorialImage(article: any, env: WorkerEnv): Promise<a
   const imageType = typeof article.imageType === 'string' ? article.imageType : '';
   const image = typeof article.image === 'string' ? article.image.trim() : '';
 
-  // CRITICAL: only a newly uploaded data URL is sent to Cloudinary.
+  // Only newly uploaded data URLs are sent to Cloudinary.
   // Existing remote URLs, Cloudinary URLs, AI illustrations, and empty images are untouched.
   if (imageType !== 'photo' || !image.startsWith('data:image/')) return article;
 
@@ -157,10 +85,11 @@ export default {
       (pathname === '/api/editorial/sync-batch' && method === 'POST');
 
     if (isEditorialWrite) {
-      const authFailure = await verifyEditorialSession(request, env);
-      if (authFailure) return authFailure;
-
       try {
+        // IMPORTANT: authentication remains authoritative in worker.ts.
+        // The Cloudinary wrapper must never perform a second, separate session validation.
+        // It only transforms a newly uploaded image, then delegates the original request
+        // (including its Authorization/x-editorial-token headers) to worker.ts.
         const preparedRequest = await prepareEditorialJsonRequest(request, env);
         return await worker.fetch(preparedRequest, env as any, ctx as any);
       } catch (error: any) {
