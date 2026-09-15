@@ -67,3 +67,5 @@ jobs:
           git add worker.ts
           git commit -m "security: remove hardcoded editorial auth fallback"
           git push origin HEAD:security/step-1-editorial-auth-fail-closed
+
+# Trigger comment: the next push executes the idempotent patcher.
