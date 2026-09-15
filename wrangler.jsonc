@@ -22,10 +22,16 @@
     }
   ],
   "vars": {
-    "APP_URL": "https://denyutglobal.my.id",
-    "NEWSLETTER_EMAIL_ENABLED": "true",
-    "EMAIL_FROM": "DenyutGlobal <newsletter@denyutglobal.my.id>",
     "APP_BASE_URL": "https://denyutglobal.my.id",
-    "CLOUDINARY_CLOUD_NAME": "y7sa1ufk"
+    "APP_URL": "https://denyutglobal.my.id",
+    "CLOUDINARY_API_KEY": "587397315524814",
+    "CLOUDINARY_CLOUD_NAME": "y7sa1ufk",
+    "EMAIL_FROM": "DenyutGlobal <newsletter@denyutglobal.my.id>",
+    "NEWSLETTER_EMAIL_ENABLED": "true"
+  },
+  "secrets": {
+    "required": [
+      "CLOUDINARY_API_SECRET"
+    ]
   }
 }
