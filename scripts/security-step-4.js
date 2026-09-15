@@ -95,3 +95,4 @@ fs.writeFileSync(packagePath, originalPackage);
 fs.unlinkSync(scriptPath);
 execFileSync('git', ['add', '-A']);
 execFileSync('git', ['commit', '-m', 'security: verify Resend webhook signatures before processing'], { stdio: 'inherit' });
+execFileSync('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
