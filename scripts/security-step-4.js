@@ -93,6 +93,8 @@ if (!s.includes('RESEND_WEBHOOK_SIGNING_SECRET?: string;')) {
 const originalPackage = execFileSync('git', ['show', 'HEAD^:package.json'], { encoding: 'utf8' });
 fs.writeFileSync(packagePath, originalPackage);
 fs.unlinkSync(scriptPath);
+execFileSync('git', ['config', 'user.name', 'github-actions[bot]']);
+execFileSync('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
 execFileSync('git', ['add', '-A']);
 execFileSync('git', ['commit', '-m', 'security: verify Resend webhook signatures before processing'], { stdio: 'inherit' });
 execFileSync('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
