@@ -1020,10 +1020,7 @@ export default {
             }
             return jsonResponse({
               success: true,
-              exists: true,
-              status,
-              isSubscribed: status === 'active',
-              token: status === 'active' ? token : undefined
+              isSubscribed: status === 'active'
             });
           }
         }
