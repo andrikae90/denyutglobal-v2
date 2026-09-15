@@ -330,6 +330,13 @@ async function executeWorkerD1Query<T = any>(
   try {
     const stmt = db.prepare(sql).bind(...params);
     const res = await stmt.all();
+    if (res.success === false) {
+      return {
+        success: false,
+        results: [],
+        error: res.error || 'Cloudflare D1 query failed.'
+      };
+    }
     return {
       success: true,
       results: (res.results || []) as T[],
@@ -1373,6 +1380,9 @@ export default {
 
     // 9. EDITORIAL ARTICLE SAVE / INSERT (POST /api/editorial/articles)
     if (pathname === '/api/editorial/articles' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ success: false, d1_persisted: false, error: 'Cloudflare D1 tidak tersedia. Penyimpanan artikel dihentikan.' }, 503);
+      }
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
       if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak. Sesi otorisasi redaksi tidak valid atau kedaluwarsa.' }, 401);
@@ -1407,15 +1417,13 @@ export default {
         // Eksekusi INSERT ke Cloudflare D1
         const d1Result = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, params);
 
-        // Update in-memory fallback
-        existingIdx = memoryArticlesCache.findIndex(a => a.id === normalized.id);
-        if (existingIdx >= 0) {
-          memoryArticlesCache[existingIdx] = normalized;
-        } else {
-          memoryArticlesCache.unshift(normalized);
-        }
-
         if (d1Result.success) {
+          existingIdx = memoryArticlesCache.findIndex(a => a.id === normalized.id);
+          if (existingIdx >= 0) {
+            memoryArticlesCache[existingIdx] = normalized;
+          } else {
+            memoryArticlesCache.unshift(normalized);
+          }
           return jsonResponse({
             success: true,
             d1_persisted: true,
@@ -1425,24 +1433,7 @@ export default {
           });
         }
 
-        if (env.DB) {
-          return jsonResponse({
-            success: false,
-            d1_persisted: false,
-            d1_source: 'd1_binding',
-            error: d1Result.error,
-            message: 'Gagal mengeksekusi INSERT ke Cloudflare D1: ' + d1Result.error,
-            data: normalized
-          }, 502);
-        }
-
-        return jsonResponse({
-          success: true,
-          d1_persisted: false,
-          d1_source: 'server_store',
-          warning: 'Data tersimpan di memori cache runtime.',
-          data: normalized
-        });
+        return jsonResponse({ success: false, d1_persisted: false, d1_source: 'd1_binding', error: d1Result.error || 'D1 write failed.', message: 'Gagal menyimpan artikel ke Cloudflare D1.' }, 502);
       } catch (err: any) {
         return jsonResponse({ success: false, error: 'Gagal menyimpan naskah redaksi: ' + err?.message }, 500);
       }
@@ -1450,6 +1441,9 @@ export default {
 
     // 10. EDITORIAL ARTICLE UPDATE (PUT /api/editorial/articles/:id)
     if (pathname.startsWith('/api/editorial/articles/') && method === 'PUT') {
+      if (!env.DB) {
+        return jsonResponse({ success: false, d1_persisted: false, error: 'Cloudflare D1 tidak tersedia. Pembaruan artikel dihentikan.' }, 503);
+      }
       const authHeader = request.headers.get('authorization') || request.headers.get('x-editorial-token');
       if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
@@ -1513,13 +1507,12 @@ export default {
         const params = newsItemToSqlParams(updated);
         const d1Result = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, params);
 
-        if (existingIdx >= 0) {
-          memoryArticlesCache[existingIdx] = updated;
-        } else {
-          memoryArticlesCache.unshift(updated);
-        }
-
         if (d1Result.success) {
+          if (existingIdx >= 0) {
+            memoryArticlesCache[existingIdx] = updated;
+          } else {
+            memoryArticlesCache.unshift(updated);
+          }
           return jsonResponse({
             success: true,
             d1_persisted: true,
@@ -1529,12 +1522,7 @@ export default {
           });
         }
 
-        return jsonResponse({
-          success: true,
-          d1_persisted: false,
-          d1_source: 'server_store',
-          data: updated
-        });
+        return jsonResponse({ success: false, d1_persisted: false, d1_source: 'd1_binding', error: d1Result.error || 'D1 write failed.', message: 'Gagal memperbarui artikel di Cloudflare D1.' }, 502);
       } catch (err: any) {
         return jsonResponse({ success: false, error: 'Gagal memperbarui artikel.' }, 500);
       }
@@ -1546,19 +1534,16 @@ export default {
       if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
       }
-
+      if (!env.DB) {
+        return jsonResponse({ success: false, d1_deleted: false, error: 'Cloudflare D1 tidak tersedia. Penghapusan artikel dihentikan.' }, 503);
+      }
       const id = decodeURIComponent(pathname.replace('/api/editorial/articles/', '').trim());
       const d1Result = await executeWorkerD1Query(env.DB, 'DELETE FROM articles WHERE id = ?', [id]);
-
+      if (!d1Result.success) {
+        return jsonResponse({ success: false, d1_deleted: false, d1_source: 'd1_binding', error: d1Result.error || 'D1 delete failed.', message: 'Gagal menghapus artikel dari Cloudflare D1.' }, 502);
+      }
       memoryArticlesCache = memoryArticlesCache.filter(a => a.id !== id);
-
-      return jsonResponse({
-        success: true,
-        d1_deleted: d1Result.success,
-        d1_source: 'd1_binding',
-        message: d1Result.success ? 'Artikel berhasil dihapus dari Cloudflare D1.' : 'Artikel dihapus dari memori.',
-        deletedId: id
-      });
+      return jsonResponse({ success: true, d1_deleted: true, d1_source: 'd1_binding', message: 'Artikel berhasil dihapus dari Cloudflare D1.', deletedId: id });
     }
 
     // 12. EDITORIAL SYNC BATCH (POST /api/editorial/sync-batch)
@@ -1567,48 +1552,34 @@ export default {
       if (!await verifyWorkerEditorialToken(authHeader, env)) {
         return jsonResponse({ success: false, error: 'Akses ditolak.' }, 401);
       }
-
+      if (!env.DB) {
+        return jsonResponse({ success: false, d1_synced_count: 0, error: 'Cloudflare D1 tidak tersedia. Sinkronisasi batch dihentikan.' }, 503);
+      }
       try {
         const body: any = await request.json();
         const articles = body?.articles;
-        if (!Array.isArray(articles)) {
-          return jsonResponse({ success: false, error: 'articles harus berupa array.' }, 400);
-        }
-
-        let d1Count = 0;
+        if (!Array.isArray(articles)) return jsonResponse({ success: false, error: 'articles harus berupa array.' }, 400);
+        const staged: NewsItem[] = [];
         for (const item of articles) {
           if (!item || (!item.title && !item.judul)) continue;
-          
-          // Image preservation in batch sync
-          let idx = memoryArticlesCache.findIndex(a => a.id === item.id || (a.slug && a.slug === item.slug));
+          const idx = memoryArticlesCache.findIndex(a => a.id === item.id || (a.slug && a.slug === item.slug));
           const currentBase = idx >= 0 ? memoryArticlesCache[idx] : null;
           if (currentBase && (!item.image || !item.image.trim()) && currentBase.image) {
-            item.image = currentBase.image;
-            item.gambar = currentBase.gambar;
+            item.image = currentBase.image; item.gambar = currentBase.gambar;
             item.captionGambar = item.captionGambar || currentBase.captionGambar;
             item.imageType = item.imageType || currentBase.imageType;
             item.imageCredit = item.imageCredit || currentBase.imageCredit;
           }
-
           const norm = normalizeNewsItem(item);
-          const params = newsItemToSqlParams(norm);
-          const res = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, params);
-          if (res.success) d1Count++;
-
-          idx = memoryArticlesCache.findIndex(a => a.id === norm.id || (a.slug && a.slug === norm.slug));
-          if (idx >= 0) {
-            memoryArticlesCache[idx] = norm;
-          } else {
-            memoryArticlesCache.push(norm);
-          }
+          const res = await executeWorkerD1Query(env.DB, D1_UPSERT_SQL, newsItemToSqlParams(norm));
+          if (!res.success) return jsonResponse({ success: false, d1_synced_count: staged.length, error: res.error || 'D1 write failed.', message: 'Sinkronisasi dibatalkan karena penulisan D1 gagal.' }, 502);
+          staged.push(norm);
         }
-
-        return jsonResponse({
-          success: true,
-          d1_synced_count: d1Count,
-          message: `Sinkronisasi batch selesai. (${d1Count} tercatat di D1)`,
-          total: memoryArticlesCache.length
-        });
+        for (const norm of staged) {
+          const idx = memoryArticlesCache.findIndex(a => a.id === norm.id || (a.slug && a.slug === norm.slug));
+          if (idx >= 0) memoryArticlesCache[idx] = norm; else memoryArticlesCache.push(norm);
+        }
+        return jsonResponse({ success: true, d1_synced_count: staged.length, d1_source: 'd1_binding', message: `Sinkronisasi batch selesai. (${staged.length} tercatat di D1)`, total: memoryArticlesCache.length });
       } catch (err: any) {
         return jsonResponse({ success: false, error: 'Gagal sinkronisasi batch.' }, 500);
       }
