@@ -1,0 +1,194 @@
+name: Security Step 4 - Resend Webhook Hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/security-step-4-patch.yml'
+
+jobs:
+  patch:
+    if: contains(github.event.head_commit.message, 'security: add robust Resend webhook hardening workflow')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Harden Resend webhook signature verification
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('worker.ts')
+          s = p.read_text()
+
+          old_env = "  RESEND_API_KEY?: string;\n  NEWSLETTER_EMAIL_ENABLED?: string;"
+          new_env = "  RESEND_API_KEY?: string;\n  RESEND_WEBHOOK_SIGNING_SECRET?: string;\n  NEWSLETTER_EMAIL_ENABLED?: string;"
+          if old_env not in s:
+              raise SystemExit('Env insertion target not found')
+          s = s.replace(old_env, new_env, 1)
+
+          marker = "// 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)"
+          if marker not in s:
+              raise SystemExit('Webhook marker not found')
+
+          helper = r'''async function verifyResendWebhookSignature(request: Request, rawBody: string, env: Env): Promise<boolean> {
+  const secret = (env.RESEND_WEBHOOK_SIGNING_SECRET || '').trim();
+  if (!secret) return false;
+
+  const svixId = request.headers.get('svix-id');
+  const svixTimestamp = request.headers.get('svix-timestamp');
+  const svixSignature = request.headers.get('svix-signature');
+  if (!svixId || !svixTimestamp || !svixSignature) return false;
+
+  const timestamp = Number(svixTimestamp);
+  if (!Number.isFinite(timestamp)) return false;
+
+  // Reject stale/future webhook requests to limit replay attacks.
+  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
+  if (ageSeconds > 300) return false;
+
+  const secretValue = secret.startsWith('whsec_') ? secret.slice(6) : secret;
+  let secretBytes: Uint8Array;
+  try {
+    const normalized = secretValue.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const binary = atob(padded);
+    secretBytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  } catch {
+    return false;
+  }
+
+  try {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      secretBytes,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    const signedPayload = `${svixId}.${svixTimestamp}.${rawBody}`;
+    const signatures = svixSignature.split(' ').map((entry) => entry.trim()).filter(Boolean);
+
+    for (const entry of signatures) {
+      const match = /^v1,(.+)$/.exec(entry);
+      if (!match) continue;
+      try {
+        const normalizedSignature = match[1].replace(/-/g, '+').replace(/_/g, '/');
+        const paddedSignature = normalizedSignature + '='.repeat((4 - (normalizedSignature.length % 4)) % 4);
+        const binarySignature = atob(paddedSignature);
+        const signatureBytes = Uint8Array.from(binarySignature, (char) => char.charCodeAt(0));
+        if (await crypto.subtle.verify('HMAC', key, signatureBytes, new TextEncoder().encode(signedPayload))) {
+          return true;
+        }
+      } catch {
+        // Ignore malformed individual signature candidates and continue checking others.
+      }
+    }
+  } catch (err) {
+    console.error('Resend webhook signature verification error:', err);
+  }
+
+  return false;
+}
+
+'''
+          s = s.replace(marker, helper + marker, 1)
+
+          old_block = '''    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
+    if (pathname === '/api/webhooks/resend' && method === 'POST') {
+      try {
+        const body: any = await request.json().catch(() => ({}));
+        if (body?.type && body?.data?.email && env.DB) {
+          const targetEmail = body.data.email.toLowerCase();
+          if (body.type === 'email.bounced' || body.type === 'email.complained') {
+            await executeWorkerD1Query(
+              env.DB,
+              `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = datetime('now') WHERE email = ?;`,
+              [targetEmail]
+            );
+          }
+        }
+        return jsonResponse({ received: true });
+      } catch (e) {
+        return jsonResponse({ received: true });
+      }
+    }
+'''
+
+          new_block = '''    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
+    if (pathname === '/api/webhooks/resend') {
+      if (method !== 'POST') {
+        return jsonResponse({ received: false, error: 'Method not allowed.' }, 405, { 'Allow': 'POST' });
+      }
+
+      try {
+        // Resend signs the exact raw request body with Svix headers. Verify before parsing or trusting the event.
+        const rawBody = await request.text();
+        if (!await verifyResendWebhookSignature(request, rawBody, env)) {
+          return jsonResponse({ received: false, error: 'Invalid webhook signature.' }, 401, {
+            'Cache-Control': 'no-store',
+            'X-Robots-Tag': 'noindex, nofollow'
+          });
+        }
+
+        let body: any;
+        try {
+          body = JSON.parse(rawBody);
+        } catch {
+          return jsonResponse({ received: false, error: 'Invalid JSON payload.' }, 400, {
+            'Cache-Control': 'no-store',
+            'X-Robots-Tag': 'noindex, nofollow'
+          });
+        }
+
+        if (!env.DB) {
+          return jsonResponse({ received: false, error: 'Cloudflare D1 is unavailable.' }, 503, {
+            'Cache-Control': 'no-store',
+            'X-Robots-Tag': 'noindex, nofollow'
+          });
+        }
+
+        if (body?.type && body?.data?.email) {
+          const targetEmail = typeof body.data.email === 'string' ? body.data.email.trim().toLowerCase() : '';
+          if (targetEmail && (body.type === 'email.bounced' || body.type === 'email.complained')) {
+            const updateRes = await executeWorkerD1Query(
+              env.DB,
+              `UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = datetime('now') WHERE email = ?;`,
+              [targetEmail]
+            );
+            if (!updateRes.success) {
+              return jsonResponse({ received: false, error: 'Failed to update subscriber status.' }, 503);
+            }
+          }
+        }
+
+        return jsonResponse({ received: true });
+      } catch (e) {
+        console.error('Resend webhook error:', e);
+        return jsonResponse({ received: false, error: 'Webhook processing failed.' }, 500);
+      }
+    }
+'''
+
+          if old_block not in s:
+              raise SystemExit('Original webhook block not found')
+          s = s.replace(old_block, new_block, 1)
+          p.write_text(s)
+          PY
+
+      - name: Validate TypeScript and build
+        run: |
+          npm install
+          npm run lint
+          npm run build
+
+      - name: Commit patch and remove workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.ts
+          git rm .github/workflows/security-step-4-patch.yml
+          git commit -m 'security: verify Resend webhook signatures before processing'
+          git push
