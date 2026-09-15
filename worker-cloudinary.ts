@@ -1,6 +1,6 @@
 import worker from './worker';
 import { uploadEditorialImageToCloudinary, uploadLegacyRemoteImageToCloudinary } from './src/services/cloudinaryImageService';
-import type { ExecutionContext } from '@cloudflare/workers-types';
+import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
 
 type WorkerEnv = Record<string, any>;
 
@@ -89,6 +89,54 @@ function isCloudinaryUrl(value: string): boolean {
   return /(^|:)\/\/res\.cloudinary\.com\//i.test(value.trim());
 }
 
+async function migrateLegacyBatch(env: WorkerEnv, limit: number): Promise<{ requested: number; migrated: any[]; failed: any[] }> {
+  if (!env.DB) throw new Error('Cloudflare D1 tidak tersedia.');
+  await ensureMigrationTable(env.DB);
+  const safeLimit = Math.min(Math.max(Math.floor(limit || 1), 1), 5);
+  const result: any = await env.DB.prepare(`
+    SELECT id, slug, image, image_type, image_credit
+    FROM articles
+    WHERE image LIKE 'http%'
+      AND image NOT LIKE '%res.cloudinary.com/%'
+    ORDER BY COALESCE(published_at, updated_at) ASC, id ASC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  const candidates = result?.results || [];
+  const migrated: any[] = [];
+  const failed: any[] = [];
+
+  for (const row of candidates) {
+    const originalUrl = String(row.image || '').trim();
+    try {
+      if (!originalUrl || isCloudinaryUrl(originalUrl)) continue;
+      const uploaded = await uploadLegacyRemoteImageToCloudinary(originalUrl, env);
+      const now = new Date().toISOString();
+      const update = await env.DB.prepare(`
+        UPDATE articles
+        SET image = ?, image_type = 'photo', image_credit = CASE WHEN TRIM(COALESCE(image_credit, '')) != '' THEN image_credit ELSE 'Dok. Redaksi DenyutGlobal' END
+        WHERE id = ? AND image = ?
+      `).bind(uploaded.secureUrl, row.id, originalUrl).run();
+      if (update?.success === false || Number(update?.meta?.changes ?? 1) < 1) {
+        throw new Error('URL artikel tidak berhasil diperbarui; URL lama tetap dipertahankan.');
+      }
+      await env.DB.prepare(`
+        INSERT INTO image_migration_log (article_id, original_url, cloudinary_url, cloudinary_public_id, migrated_at, verified)
+        VALUES (?, ?, ?, ?, ?, 1)
+        ON CONFLICT(article_id) DO UPDATE SET
+          original_url = excluded.original_url,
+          cloudinary_url = excluded.cloudinary_url,
+          cloudinary_public_id = excluded.cloudinary_public_id,
+          migrated_at = excluded.migrated_at,
+          verified = excluded.verified
+      `).bind(row.id, originalUrl, uploaded.secureUrl, uploaded.publicId, now).run();
+      migrated.push({ id: row.id, slug: row.slug, cloudinaryUrl: uploaded.secureUrl, bytes: uploaded.bytes });
+    } catch (error: any) {
+      failed.push({ id: row.id, slug: row.slug, error: error?.message || 'Migrasi gagal.' });
+    }
+  }
+  return { requested: candidates.length, migrated, failed };
+}
+
 async function handleLegacyImageMigration(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response | null> {
   const pathname = new URL(request.url).pathname;
   if (pathname !== '/api/editorial/image-migration' && pathname !== '/api/editorial/image-migration/status') return null;
@@ -130,17 +178,16 @@ async function handleLegacyImageMigration(request: Request, env: WorkerEnv, ctx:
     const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 5, 1), 5);
     const dryRun = body?.dryRun === true;
 
-    const result: any = await env.DB.prepare(`
-      SELECT id, slug, image, image_type, image_credit
-      FROM articles
-      WHERE image LIKE 'http%'
-        AND image NOT LIKE '%res.cloudinary.com/%'
-      ORDER BY COALESCE(published_at, updated_at) ASC, id ASC
-      LIMIT ?
-    `).bind(limit).all();
-
-    const candidates = result?.results || [];
     if (dryRun) {
+      const result: any = await env.DB.prepare(`
+        SELECT id, slug, image
+        FROM articles
+        WHERE image LIKE 'http%'
+          AND image NOT LIKE '%res.cloudinary.com/%'
+        ORDER BY COALESCE(published_at, updated_at) ASC, id ASC
+        LIMIT ?
+      `).bind(limit).all();
+      const candidates = result?.results || [];
       return jsonResponse({
         success: true,
         dryRun: true,
@@ -149,42 +196,8 @@ async function handleLegacyImageMigration(request: Request, env: WorkerEnv, ctx:
       });
     }
 
-    const migrated: any[] = [];
-    const failed: any[] = [];
-
-    for (const row of candidates) {
-      const originalUrl = String(row.image || '').trim();
-      try {
-        if (!originalUrl || isCloudinaryUrl(originalUrl)) continue;
-        const uploaded = await uploadLegacyRemoteImageToCloudinary(originalUrl, env);
-
-        await env.DB.prepare(`
-          INSERT INTO image_migration_log (article_id, original_url, cloudinary_url, cloudinary_public_id, migrated_at, verified)
-          VALUES (?, ?, ?, ?, ?, 1)
-          ON CONFLICT(article_id) DO UPDATE SET
-            original_url = excluded.original_url,
-            cloudinary_url = excluded.cloudinary_url,
-            cloudinary_public_id = excluded.cloudinary_public_id,
-            migrated_at = excluded.migrated_at,
-            verified = excluded.verified
-        `).bind(row.id, originalUrl, uploaded.secureUrl, uploaded.publicId, new Date().toISOString()).run();
-
-        const update = await env.DB.prepare(`
-          UPDATE articles
-          SET image = ?, image_type = 'photo', image_credit = CASE WHEN TRIM(COALESCE(image_credit, '')) != '' THEN image_credit ELSE 'Dok. Redaksi DenyutGlobal' END
-          WHERE id = ? AND image = ?
-        `).bind(uploaded.secureUrl, row.id, originalUrl).run();
-
-        if (update?.success === false || Number(update?.meta?.changes ?? 1) < 1) {
-          throw new Error('URL artikel tidak berhasil diperbarui; URL lama tetap dipertahankan.');
-        }
-        migrated.push({ id: row.id, slug: row.slug, cloudinaryUrl: uploaded.secureUrl, bytes: uploaded.bytes });
-      } catch (error: any) {
-        failed.push({ id: row.id, slug: row.slug, error: error?.message || 'Migrasi gagal.' });
-      }
-    }
-
-    return jsonResponse({ success: true, dryRun: false, requested: candidates.length, migrated, failed, note: 'URL lama tidak dihapus dari sumber. Jika update D1 gagal, artikel tetap menggunakan URL lama.' });
+    const result = await migrateLegacyBatch(env, limit);
+    return jsonResponse({ success: true, dryRun: false, ...result, note: 'URL lama tidak dihapus dari sumber. Jika migrasi gagal, artikel tetap menggunakan URL lama.' });
   } catch (error: any) {
     console.error('Legacy image migration error:', error);
     return jsonResponse({ success: false, error: 'Migrasi gambar lama gagal diproses.' }, 500);
@@ -226,5 +239,15 @@ export default {
       }
     }
     return worker.fetch(request, env as any, ctx as any);
+  },
+
+  async scheduled(_controller: ScheduledController, env: WorkerEnv, _ctx: ExecutionContext): Promise<void> {
+    try {
+      // One legacy image per day: gradual migration that stays conservative with the Free plan quota.
+      const result = await migrateLegacyBatch(env, 1);
+      console.log('Daily Cloudinary legacy-image migration:', JSON.stringify(result));
+    } catch (error) {
+      console.error('Daily Cloudinary legacy-image migration failed:', error);
+    }
   }
 };
