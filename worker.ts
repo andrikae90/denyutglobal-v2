@@ -49,6 +49,66 @@ export interface Env {
 // In-Memory Fallback Cache for runtime (starts empty, populated only by active D1 queries or valid admin actions)
 let memoryArticlesCache: NewsItem[] = [];
 
+type EditorialAuthRateState = { windowStart: number; attempts: number; blockedUntil: number };
+const editorialAuthRateLimit = new Map<string, EditorialAuthRateState>();
+const EDITORIAL_AUTH_WINDOW_MS = 60_000;
+const EDITORIAL_AUTH_MAX_ATTEMPTS = 5;
+const EDITORIAL_AUTH_BLOCK_MS = 15 * 60_000;
+const EDITORIAL_AUTH_MAX_TRACKED_CLIENTS = 5_000;
+
+function getEditorialAuthClientKey(request: Request): string {
+  return (request.headers.get('CF-Connecting-IP') || 'unknown').trim() || 'unknown';
+}
+
+function checkEditorialAuthRateLimit(request: Request): { allowed: boolean; retryAfter: number } {
+  const now = Date.now();
+  const key = getEditorialAuthClientKey(request);
+  const state = editorialAuthRateLimit.get(key);
+
+  if (!state) {
+    editorialAuthRateLimit.set(key, { windowStart: now, attempts: 1, blockedUntil: 0 });
+    return { allowed: true, retryAfter: 0 };
+  }
+
+  if (state.blockedUntil > now) {
+    return { allowed: false, retryAfter: Math.max(1, Math.ceil((state.blockedUntil - now) / 1000)) };
+  }
+
+  if (now - state.windowStart >= EDITORIAL_AUTH_WINDOW_MS) {
+    state.windowStart = now;
+    state.attempts = 1;
+    state.blockedUntil = 0;
+    return { allowed: true, retryAfter: 0 };
+  }
+
+  state.attempts += 1;
+  if (state.attempts > EDITORIAL_AUTH_MAX_ATTEMPTS) {
+    state.blockedUntil = now + EDITORIAL_AUTH_BLOCK_MS;
+    return { allowed: false, retryAfter: Math.ceil(EDITORIAL_AUTH_BLOCK_MS / 1000) };
+  }
+
+  return { allowed: true, retryAfter: 0 };
+}
+
+function clearEditorialAuthRateLimit(request: Request): void {
+  editorialAuthRateLimit.delete(getEditorialAuthClientKey(request));
+}
+
+function pruneEditorialAuthRateLimit(): void {
+  const now = Date.now();
+  for (const [key, state] of editorialAuthRateLimit) {
+    if (state.blockedUntil <= now && now - state.windowStart > EDITORIAL_AUTH_WINDOW_MS) {
+      editorialAuthRateLimit.delete(key);
+    }
+  }
+  while (editorialAuthRateLimit.size > EDITORIAL_AUTH_MAX_TRACKED_CLIENTS) {
+    const oldestKey = editorialAuthRateLimit.keys().next().value;
+    if (!oldestKey) break;
+    editorialAuthRateLimit.delete(oldestKey);
+  }
+}
+
+
 // =====================================================================
 // D1 SQL & NORMALIZATION UTILITIES
 // =====================================================================
@@ -987,6 +1047,9 @@ export default {
 
     // 5.5B STATUS LANGGANAN (GET/POST /api/subscription-status & /api/subscription/status)
     if (pathname === '/api/subscription-status' || pathname === '/api/subscription/status') {
+      if (method !== 'GET' && method !== 'POST') {
+        return jsonResponse({ success: false, error: 'Method not allowed.' }, 405, { 'Allow': 'GET, POST' });
+      }
       try {
         const urlObj = new URL(request.url);
         let email = urlObj.searchParams.get('email') || '';
@@ -1036,8 +1099,6 @@ export default {
 
         return jsonResponse({
           success: true,
-          exists: false,
-          status: 'none',
           isSubscribed: false
         });
       } catch (err: any) {
@@ -1343,6 +1404,11 @@ export default {
 
 // 6. EDITORIAL AUTH (POST /api/editorial/auth)
     if (pathname === '/api/editorial/auth' && method === 'POST') {
+      pruneEditorialAuthRateLimit();
+      const authRate = checkEditorialAuthRateLimit(request);
+      if (!authRate.allowed) {
+        return jsonResponse({ success: false, error: 'Terlalu banyak percobaan autentikasi. Silakan coba lagi nanti.' }, 429, { 'Retry-After': String(authRate.retryAfter), 'Cache-Control': 'no-store' });
+      }
       try {
         const body: any = await request.json();
         const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || '').trim().toLowerCase();
@@ -1367,6 +1433,7 @@ export default {
           const sig = await sha256Hex(`${expHex}:${targetHash}`);
           const sessionToken = `dg_${expHex}_${sig}`;
           activeEditorialSessions.set(sessionToken, expiresAt);
+          clearEditorialAuthRateLimit(request);
 
           return jsonResponse({
             success: true,
@@ -1415,13 +1482,10 @@ export default {
           });
         }
       }
-
       return jsonResponse({
-        success: true,
-        source: 'server_store',
-        count: memoryArticlesCache.length,
-        data: memoryArticlesCache
-      });
+        success: false,
+        error: 'Cloudflare D1 tidak tersedia. Akses artikel redaksi dihentikan.'
+      }, 503);
     }
 
     // 9. EDITORIAL ARTICLE SAVE / INSERT (POST /api/editorial/articles)
