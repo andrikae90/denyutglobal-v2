@@ -13,8 +13,10 @@ if (!s.includes('RESEND_WEBHOOK_SIGNING_SECRET?: string;')) {
   s = s.replace(envOld, envNew, 1);
 
   const marker = "// 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)";
-  const markerIndex = s.indexOf(marker);
-  if (markerIndex < 0) throw new Error('Webhook marker not found');
+  const start = s.indexOf(marker);
+  const endMarker = "// 6. EDITORIAL AUTH (POST /api/editorial/auth)";
+  const end = s.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error('Webhook block boundaries not found');
 
   const helper = `async function verifyResendWebhookSignature(request: Request, rawBody: string, env: Env): Promise<boolean> {
   const secret = (env.RESEND_WEBHOOK_SIGNING_SECRET || '').trim();
@@ -54,10 +56,6 @@ if (!s.includes('RESEND_WEBHOOK_SIGNING_SECRET?: string;')) {
 }
 
 `;
-  s = s.slice(0, markerIndex) + helper + s.slice(markerIndex);
-
-  const blockRegex = /    \/\/ 5\.8 RESEND WEBHOOK LISTENER \(POST \/api\/webhooks\/resend\)\n    if \(pathname === '\/api\/webhooks\/resend' && method === 'POST'\) \{[\s\S]*?\n    \}\n\n    \/\/ 6\. EDITORIAL AUTH/;
-  if (!blockRegex.test(s)) throw new Error('Original webhook block not found');
 
   const newBlock = `    // 5.8 RESEND WEBHOOK LISTENER (POST /api/webhooks/resend)
     if (pathname === '/api/webhooks/resend') {
@@ -86,13 +84,12 @@ if (!s.includes('RESEND_WEBHOOK_SIGNING_SECRET?: string;')) {
       }
     }
 
-    // 6. EDITORIAL AUTH`;
-  s = s.replace(blockRegex, newBlock);
+`;
+  s = s.slice(0, start) + helper + newBlock + s.slice(end);
   fs.writeFileSync(workerPath, s);
   console.log('Patch 4 applied to worker.ts');
 }
 
-// Restore package.json and remove this one-shot patcher before committing the security change.
 const originalPackage = execFileSync('git', ['show', 'HEAD^:package.json'], { encoding: 'utf8' });
 fs.writeFileSync(packagePath, originalPackage);
 fs.unlinkSync(scriptPath);
