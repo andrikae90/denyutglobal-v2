@@ -1,5 +1,6 @@
 import worker from './worker';
 import { uploadEditorialImageToCloudinary } from './src/services/cloudinaryImageService';
+import type { ExecutionContext } from '@cloudflare/workers-types';
 
 type WorkerEnv = Record<string, any>;
 
