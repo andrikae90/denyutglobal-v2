@@ -378,7 +378,6 @@ async function ensureNewsletterDeliveriesD1Table(db: WorkerD1Database): Promise<
 // =====================================================================
 // AUTHENTICATION UTILITIES
 // =====================================================================
-const DEFAULT_EDITORIAL_HASH = '518f21a9a8470c890258ddaa2dc85c5483f597e22d7dc4b4a825208aa0eb1ea7';
 const activeEditorialSessions = new Map<string, number>();
 
 function cleanExpiredSessions() {
@@ -421,7 +420,8 @@ async function verifyWorkerEditorialToken(token: string | null | undefined, env:
       const sig = parts[2];
       const expiresAt = parseInt(expHex, 16);
       if (!isNaN(expiresAt) && expiresAt > Date.now()) {
-        const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || DEFAULT_EDITORIAL_HASH).toLowerCase();
+        const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || '').trim().toLowerCase();
+        if (!targetHash) return false;
         const expectedSig = await sha256Hex(`${expHex}:${targetHash}`);
         if (sig.toLowerCase() === expectedSig.toLowerCase()) {
           activeEditorialSessions.set(cleanToken, expiresAt);
@@ -1295,7 +1295,10 @@ export default {
     if (pathname === '/api/editorial/auth' && method === 'POST') {
       try {
         const body: any = await request.json();
-        const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || DEFAULT_EDITORIAL_HASH).toLowerCase();
+        const targetHash = (env.EDITORIAL_PASSPHRASE_SHA256_HASH || '').trim().toLowerCase();
+        if (!targetHash) {
+          return jsonResponse({ success: false, error: 'Autentikasi Ruang Redaksi belum dikonfigurasi di Cloudflare Secret.' }, 503);
+        }
         let inputHash = '';
 
         if (body?.passphraseHash && typeof body.passphraseHash === 'string') {
