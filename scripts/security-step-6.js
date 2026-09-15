@@ -3,7 +3,6 @@ import { execFileSync } from 'node:child_process';
 
 const workerPath = 'worker.ts';
 const packagePath = 'package.json';
-const workflowPath = '.github/workflows/denyutglobal-build.yml';
 
 let worker = fs.readFileSync(workerPath, 'utf8');
 
@@ -47,12 +46,10 @@ const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 pkg.scripts.build = 'vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs';
 fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
 
-fs.writeFileSync(workflowPath, `name: DenyutGlobal Build & Deploy\n\non:\n  push:\n    branches: ["main"]\n  workflow_dispatch:\n\njobs:\n  build-and-deploy:\n    runs-on: ubuntu-latest\n\n    steps:\n      - name: Checkout repository\n        uses: actions/checkout@v4\n\n      - name: Setup Node.js\n        uses: actions/setup-node@v4\n        with:\n          node-version: 22\n\n      - name: Install dependencies\n        run: npm install\n\n      - name: Type check\n        run: npm run lint\n\n      - name: Build application\n        run: npm run build\n\n      - name: Deploy to Cloudflare Worker\n        run: npx wrangler deploy --config wrangler.jsonc\n        env:\n          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}\n          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}\n`);
-
 fs.unlinkSync(new URL(import.meta.url).pathname);
 
 execFileSync('git', ['config', 'user.name', 'github-actions[bot]'], { stdio: 'inherit' });
 execFileSync('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], { stdio: 'inherit' });
-execFileSync('git', ['add', 'worker.ts', 'package.json', '.github/workflows/denyutglobal-build.yml', 'scripts/security-step-6.js'], { stdio: 'inherit' });
+execFileSync('git', ['add', 'worker.ts', 'package.json', 'scripts/security-step-6.js'], { stdio: 'inherit' });
 execFileSync('git', ['commit', '-m', 'security: harden editorial auth and API endpoints'], { stdio: 'inherit' });
 execFileSync('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
