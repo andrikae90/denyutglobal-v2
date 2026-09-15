@@ -8,14 +8,18 @@ function copyEditorialHeaders(request: Request): Headers {
   const headers = new Headers();
   const authorization = request.headers.get('authorization');
   const editorialToken = request.headers.get('x-editorial-token');
+  const cookie = request.headers.get('cookie');
   if (authorization) headers.set('authorization', authorization);
   if (editorialToken) headers.set('x-editorial-token', editorialToken);
+  // The editorial session may be stored in an HttpOnly cookie. Preserve it
+  // when the wrapper performs its internal session verification request.
+  if (cookie) headers.set('cookie', cookie);
   return headers;
 }
 
 async function verifyEditorialSession(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response | null> {
   const authHeaders = copyEditorialHeaders(request);
-  if (!authHeaders.has('authorization') && !authHeaders.has('x-editorial-token')) {
+  if (!authHeaders.has('authorization') && !authHeaders.has('x-editorial-token') && !authHeaders.has('cookie')) {
     return new Response(JSON.stringify({ success: false, error: 'Akses ditolak. Sesi redaksi tidak ditemukan.' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
