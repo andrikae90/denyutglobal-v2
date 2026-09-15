@@ -443,12 +443,18 @@ async function verifyWorkerEditorialToken(token: string | null | undefined, env:
 }
 
 function jsonResponse(data: any, status = 200, headers: Record<string, string> = {}): Response {
+  const appUrl = 'https://denyutglobal.my.id';
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'X-Robots-Tag': 'noindex, nofollow',
-      'Access-Control-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+      'Access-Control-Allow-Origin': appUrl,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Editorial-Token',
       ...headers
@@ -504,15 +510,23 @@ export default {
     const pathname = url.pathname;
     const method = request.method.toUpperCase();
 
-    // 1. CORS Preflight
+    // 1. CORS Preflight — only the production origin is allowed
     if (method === 'OPTIONS') {
+      const requestedOrigin = request.headers.get('Origin') || '';
+      const allowedOrigin = 'https://denyutglobal.my.id';
+      const corsOrigin = requestedOrigin === allowedOrigin ? allowedOrigin : allowedOrigin;
       return new Response(null, {
         status: 204,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': corsOrigin,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Editorial-Token',
-          'Access-Control-Max-Age': '86400'
+          'Access-Control-Max-Age': '86400',
+          'Vary': 'Origin',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'SAMEORIGIN',
+          'Referrer-Policy': 'strict-origin-when-cross-origin',
+          'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
         }
       });
     }
@@ -550,9 +564,7 @@ export default {
     if (pathname === '/api/health' && method === 'GET') {
       return jsonResponse({
         status: 'ok',
-        runtime: 'cloudflare_workers',
-        hasD1: !!env.DB,
-        hasGeminiKey: !!(env.GEMINI_API_KEY || (globalThis as any).process?.env?.GEMINI_API_KEY)
+        runtime: 'cloudflare_workers'
       });
     }
 
@@ -602,11 +614,8 @@ export default {
       if (!env.DB) {
         return jsonResponse({
           success: false,
-          d1_connected: false,
-          d1_source: 'none',
-          error: 'Cloudflare D1 binding (env.DB) is not present.',
-          mode: 'Cloudflare Workers Binding'
-        });
+          error: 'Layanan basis data sementara tidak tersedia.'
+        }, 503);
       }
 
       const queryRes = await executeWorkerD1Query<{ total: number }>(
@@ -618,22 +627,14 @@ export default {
         const total = queryRes.results[0]?.total ?? 0;
         return jsonResponse({
           success: true,
-          d1_connected: true,
-          d1_source: 'd1_binding',
-          total_articles_in_d1: total,
-          error: null,
-          mode: 'Cloudflare Workers Native D1 Binding'
+          status: 'available'
         });
       }
 
       return jsonResponse({
         success: false,
-        d1_connected: false,
-        d1_source: 'd1_binding',
-        total_articles_in_d1: 0,
-        error: queryRes.error,
-        mode: 'Cloudflare Workers Native D1 Binding'
-      }, 502);
+        error: 'Layanan basis data sementara tidak tersedia.'
+      }, 503);
     }
 
     // 4. PUBLIC ARTICLES (GET /api/articles)
